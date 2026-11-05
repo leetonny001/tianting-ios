@@ -18,12 +18,14 @@ final class Fake {
     let clock = FakeClock()
     let client: IMClient
 
-    init() {
+    init(limits: PushLimits = PushLimits()) {
         var options = IMClientOptions(url: "ws://im.test/ws")
+        options.pushLimits = limits
         options.transport = transport
         options.clock = clock
         options.random = { 0.5 }
         options.systemEvents = false
+        options.pushCursorStore = nil
         var n = 0
         options.newId = {
             n += 1

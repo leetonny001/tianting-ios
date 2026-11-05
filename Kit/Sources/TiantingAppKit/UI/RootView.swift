@@ -22,6 +22,7 @@ public struct TiantingRootView: View {
             didReset = true
             KeychainSessionStore().clear()
             UIPrefs().set(ThemeController.key, nil)
+            try? FileManager.default.removeItem(at: FilePushCursorStore.defaultDirectory)
             if let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
                 try? FileManager.default.removeItem(at: dir.appendingPathComponent("tianting"))
             }
@@ -63,6 +64,7 @@ private struct LoggedInView: View {
                     // Keyed by route: a deep link from one chat to another must not keep the old page's state.
                     .navigationDestination(for: Route.self) { RouteView(route: $0).id($0) }
             }
+            NoticeBannerLayer()
             DialogLayer()
         }
         .fullScreenCover(item: Binding(get: { model.fatal.map(FatalItem.init) }, set: { _ in })) { item in
@@ -97,6 +99,7 @@ private struct RouteView: View {
         case .blocks: BlocksPage()
         case .privacy: PrivacyPage()
         case .appearance: AppearancePage()
+        case .notices: NoticesPage()
         }
     }
 }

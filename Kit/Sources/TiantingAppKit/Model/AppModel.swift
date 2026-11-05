@@ -10,6 +10,8 @@ import TiantingIM
 public final class AppModel {
     public private(set) var session: Session?
     public private(set) var store: IMStore?
+    /// This login's system notices (F-UI-44).
+    public private(set) var notices: NoticeStore?
     public private(set) var drafts = DraftStore()
     /// Kicked or the login ended: the dialog that cannot be dismissed (F-UI-18).
     public private(set) var fatal: FatalReason?
@@ -26,6 +28,7 @@ public final class AppModel {
     public let hub = UIHub()
     public let theme: ThemeController
     @ObservationIgnored private let sessions: SessionStore
+    @ObservationIgnored private let prefs: UIPrefs
     @ObservationIgnored private let makeClient: (AppConfig) -> IMClient
     @ObservationIgnored private let monitor = NWPathMonitor()
     /// Each login gets its own navigation state and page state.
@@ -35,11 +38,13 @@ public final class AppModel {
         config: AppConfig,
         sessions: SessionStore,
         theme: ThemeController = ThemeController(),
+        prefs: UIPrefs = UIPrefs(),
         makeClient: ((AppConfig) -> IMClient)? = nil
     ) {
         self.config = config
         self.sessions = sessions
         self.theme = theme
+        self.prefs = prefs
         self.makeClient = makeClient ?? AppModel.liveClient
         monitor.pathUpdateHandler = { [weak self] path in
             let online = path.status == .satisfied
@@ -88,6 +93,9 @@ public final class AppModel {
             self?.hub.show(errorText(code, cmd: "send"))
         }
         self.store = store
+        let notices = NoticeStore(client: client, userId: newSession.userId, prefs: prefs)
+        notices.attach()  // Before connecting: with a subscriber the SDK catches up as soon as auth succeeds.
+        self.notices = notices
         session = newSession
         drafts = DraftStore()
         tab = .chats
@@ -98,8 +106,13 @@ public final class AppModel {
         TTLog.event("session.started")
     }
 
-    /// F-AUTH-05: closes with 1000, clears memory, the local database and the token; `ui.*` stays (F-UI-16 rule 3).
-    public func logout() {
+    /// F-AUTH-05: closes with 1000, clears memory, the local database and the token; `ui.*` stays (F-UI-16 rule 3), except
+    /// the notice baseline. A kick or a dead credential keeps that too, so logging in again does not repeat reminders
+    /// (F-PUSH-12 rule 5). The push cursor is not in the local database and stays in every case (PRD-live 4.9).
+    public func logout(keepNoticeSeen: Bool = false) {
+        notices?.detach()
+        notices = nil
+        if !keepNoticeSeen, let userId = session?.userId { prefs.set(noticeSeenKey(userId), nil) }
         store?.client.destroy()
         store = nil
         sessions.clear()
@@ -134,6 +147,12 @@ public final class AppModel {
     public func selectTab(_ next: AppTab) {
         if next == .chats, tab == .chats { chatsScrollTick += 1 }
         tab = next
+    }
+
+    /// Tapping the notice banner.
+    func openNotices() {
+        notices?.dismissBanner()
+        go(Destination(tab: .me, path: [.notices]))
     }
 
     func go(_ destination: Destination) {

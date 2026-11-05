@@ -37,6 +37,7 @@ public enum Route: Hashable, Sendable {
     case blocks
     case privacy
     case appearance
+    case notices
 }
 
 public enum AppTab: String, Hashable, Sendable, CaseIterable {
@@ -94,6 +95,7 @@ private func destination(_ s: [String]) -> Destination {
         case ("contacts", "add"): return Destination(tab: .contacts, path: [.addFriend])
         case ("user", let id): return Destination(tab: .contacts, path: [.user(id, UserContext())])
         case ("me", "settings"): return Destination(tab: .me, path: [.settings])
+        case ("me", "notices"): return Destination(tab: .me, path: [.notices])
         default: return .home
         }
     case 3:

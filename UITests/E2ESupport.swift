@@ -143,6 +143,7 @@ class E2ECase: XCTestCase {
         var options = IMClientOptions(url: http.replacingOccurrences(of: "http://", with: "ws://") + "/ws")
         options.platform = .web
         options.systemEvents = false
+        options.pushCursorStore = nil
         let client = IMClient(options: options)
         client.connect(token: token)
         peers.append(client)

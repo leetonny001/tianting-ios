@@ -32,11 +32,11 @@ tt_server_start() {
   b64="$(printf '%s' "$TT_E2E_SECRET" | base64)"
   callers="$TT_E2E_DIR/callers.json"
   (umask 077; cat > "$callers" <<JSON
-[{"id":"$TT_E2E_CALLER","alg":"hmac-sha256","secret":"$b64","scopes":["user.ban","msg.delete","mute.write","social.settings","social.friends","group.dissolve","group.write"]}]
+[{"id":"$TT_E2E_CALLER","alg":"hmac-sha256","secret":"$b64","scopes":["user.ban","msg.delete","mute.write","social.settings","social.friends","group.dissolve","group.write","push.user","push.all"],"pushTypes":["notice","promo"]}]
 JSON
   )
   IM_ADDR="127.0.0.1:$port" IM_ADMIN_ADDR="127.0.0.1:$admin_port" IM_METRICS_ADDR=off \
-    IM_DB="$TT_E2E_DIR/im.db" IM_TEST_MODE=1 IM_DEMO_LOGIN=1 IM_V13_ADMIN_FEATURES=1 \
+    IM_DB="$TT_E2E_DIR/im.db" IM_TEST_MODE=1 IM_DEMO_LOGIN=1 IM_V13_ADMIN_FEATURES=1 IM_PUSH_ENABLED=1 \
     IM_ADMIN_KEY="$TT_E2E_ADMIN_KEY" IM_JWT_SECRET="$(openssl rand -hex 24)" \
     IM_QUARANTINE_KEY="$(openssl rand -hex 24)" IM_ADMIN_CALLERS="$callers" \
     "$TT_E2E_DIR/im-server" > "$TT_E2E_DIR/server.log" 2>&1 &

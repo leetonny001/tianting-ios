@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""After an end-to-end run: what the app left on the simulator (AC-UI-90-2, AC-UI-90-12; AC-ADM-31-4).
+"""After an end-to-end run: what the app left on the simulator (AC-UI-90-2, AC-UI-90-12; AC-ADM-31-4; NF-UI-13).
 
   python3 -I scripts/py/check_e2e_leftovers.py UDID "YYYY-MM-DD HH:MM:SS" SERVER_LOG
 
-Checks os_log of the app process for message markers, the app's UserDefaults for keys outside ui.*, and the app's data
-directory for text of deleted messages. The app container is removed by uninstalling, so run this straight after the tests.
+Checks os_log of the app process for message markers, the app's UserDefaults for keys outside ui.* and for non-numeric
+ui.noticeSeen.* values, and the app's data directory for text of deleted messages and of system notices (the notice list is
+memory only, the push cursor file has numbers and pushIds). The app container is removed by uninstalling, so run this straight after the tests.
 """
 import os
 import plistlib
@@ -50,12 +51,19 @@ def main():
         keys = []
         if os.path.exists(plist):
             with open(plist, "rb") as f:
-                keys = list(plistlib.load(f).keys())
+                defaults = plistlib.load(f)
+            keys = list(defaults.keys())
+            for k, v in defaults.items():
+                if k.startswith("ui.noticeSeen.") and not (isinstance(v, str) and v.isdigit()):
+                    problems.append("%s is not a plain number" % k)
+                if isinstance(v, str) and "ZXQ-" in v:
+                    problems.append("UserDefaults %s holds message text" % k)
         bad = [k for k in keys if not k.startswith("ui.") and not SYSTEM_KEY.match(k)]
         print("UserDefaults keys:", sorted(keys))
         if bad:
             problems.append("UserDefaults has non-ui keys: %s" % bad)
         found = []
+        notices = []
         for d, _, files in os.walk(root):
             for name in files:
                 p = os.path.join(d, name)
@@ -66,9 +74,14 @@ def main():
                     continue
                 if b"ZXQ-DEL-" in blob:
                     found.append(p)
+                if b"ZXQ-PUSH-" in blob or "ZXQ-PUSH-".encode("utf-16-be") in blob:
+                    notices.append(p)
         if found:
             problems.append("deleted text on disk: %s" % found)
         print("data directory: no deleted text" if not found else "data directory: deleted text found")
+        if notices:
+            problems.append("notice text on disk: %s" % notices)
+        print("data directory: no notice text" if not notices else "data directory: notice text found")
 
     for p in problems:
         print("PROBLEM:", p)

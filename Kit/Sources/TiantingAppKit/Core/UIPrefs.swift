@@ -1,7 +1,8 @@
 import Foundation
 
 /// The app's only use of UserDefaults: device preferences under `ui.` (AC-UI-90-2, NF-UI-13). They stay after logout
-/// (F-UI-16 rule 3). scripts/py/check_sources.py rejects UserDefaults anywhere else.
+/// (F-UI-16 rule 3), except `ui.noticeSeen.{userId}`: one number, no content, deleted on logout (L-18, F-PUSH-12 rule 5).
+/// scripts/py/check_sources.py rejects UserDefaults anywhere else.
 public struct UIPrefs {
     public static let prefix = "ui."
     private let defaults: UserDefaults

@@ -9,7 +9,7 @@
 | `App/` | `@main`、App 图标、启动页颜色（Xcode target `Tianting`） |
 | `Kit/` | 全部应用代码（Swift Package `TiantingAppKit`，路径依赖 `../../tianting-sdk-swift`）和单元测试 |
 | `Kit/Sources/TiantingAppKit/Core/` | 不依赖界面的规则：路由与 deep link、错误文案、时间、拼音分组、会话摘要、群权限、登录、Keychain、`ui.*` 偏好、日志 |
-| `Kit/Sources/TiantingAppKit/Model/` | `AppModel`（会话、导航）、`IMStore`（SDK 事件 → 可观察状态）、`UIHub`（轻提示、弹窗） |
+| `Kit/Sources/TiantingAppKit/Model/` | `AppModel`（会话、导航）、`IMStore`（SDK 事件 → 可观察状态）、`NoticeStore`（系统通知）、`UIHub`（轻提示、弹窗） |
 | `Kit/Sources/TiantingAppKit/UI/` | 页面和组件 |
 | `Kit/Sources/TiantingAppKit/Theme/` | `Tokens.swift`（生成）、字体、外观 |
 | `UITests/` | XCUITest：连真实 im-server 的端到端用例 |
@@ -39,6 +39,8 @@ python3 -I scripts/py/check_sources.py          # 主题文件外无颜色字面
 python3 -I scripts/py/gen_icons.py              # 从 tianting-web 的 Lucide 生成图标（清单变化时才用）
 swift scripts/gen-app-icon.swift App/Assets.xcassets/AppIcon.appiconset/AppIcon.png
 ```
+
+系统通知（PRD-ui F-UI-44、PRD-live F-PUSH-12）：横幅、`我 → 系统通知`列表、未查看数都在 `Model/NoticeStore.swift` 和 `UI/Pages/NoticePages.swift`。列表只在内存，重启后只有本次打开以来收到的；UserDefaults 只有 `ui.noticeSeen.{userId}` 这一个数字，退出登录时删除，被踢时保留。推送游标由 SDK 放在 Application Support 的独立文件里，不随退出登录删除。`scripts/e2e-server.sh` 用 `IM_PUSH_ENABLED=1` 启动服务端。
 
 端到端用例的"另一个账号"是测试进程里的真实 `IMClient`：一台模拟器不能同时跑两份同一个 App。测试调用的服务端密钥由 `scripts/e2e-server.sh` 每次随机生成，只在本机临时目录。
 

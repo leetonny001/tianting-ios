@@ -52,16 +52,44 @@ struct MePage: View {
                 .accessibilityElement(children: .contain)
                 .padding(.horizontal, TS.s3)
                 .padding(.top, TS.s3)
-                RowButton(id: "me-settings", action: { model.push(.settings) }) {
-                    Icon(name: .settings).foregroundStyle(TC.textSecondary)
-                    Text("设置").font(TTFont.body).foregroundStyle(TC.textPrimary)
-                    Spacer()
-                    Icon(name: .forward, size: 16).foregroundStyle(TC.textTertiary)
+                VStack(spacing: 0) {
+                    RowButton(id: "me-settings", action: { model.push(.settings) }) {
+                        Icon(name: .settings).foregroundStyle(TC.textSecondary)
+                        Text("设置").font(TTFont.body).foregroundStyle(TC.textPrimary)
+                        Spacer()
+                        Icon(name: .forward, size: 16).foregroundStyle(TC.textTertiary)
+                    }
+                    NoticesEntry()
                 }
             }
         }
         .background(TC.bg)
         .task(id: store.connected) { await store.loadProfiles([store.me]) }
+    }
+}
+
+/// The "系统通知" row with the unseen count (F-UI-44 rule 3). The count sits outside the button, where a button's combined
+/// accessibility element would hide its identifier; a hidden copy in the row keeps its width reserved.
+private struct NoticesEntry: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let unseen = model.notices?.unseen ?? 0
+        RowButton(id: "me-notices", action: { model.push(.notices) }) {
+            Text("系统通知").font(TTFont.body).foregroundStyle(TC.textPrimary)
+            Spacer()
+            if unseen > 0 { CountBadge(text: String(unseen)).hidden() }
+            Icon(name: .forward, size: 16).foregroundStyle(TC.textTertiary)
+        }
+        .accessibilityValue(unseen > 0 ? "\(unseen) 条未查看" : "")
+        .overlay(alignment: .trailing) {
+            if unseen > 0 {
+                CountBadge(text: String(unseen))
+                    .padding(.trailing, TS.s4 + 16 + TS.s3)
+                    .allowsHitTesting(false)
+                    .accessibilityIdentifier("me-notices-count")
+            }
+        }
     }
 }
 

@@ -152,7 +152,7 @@ struct KickedDialog: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("kicked-text")
                     BlockButton(title: "确定", id: "kicked-ok") {
-                        model.logout()
+                        model.logout(keepNoticeSeen: true)
                     }
                 }
                 .padding(TS.s4)
