@@ -1,0 +1,72 @@
+# tianting-ios CI.
+# checks: tokens, contrast and hue, source rules. Needs nothing private, always runs.
+# build-and-test: builds the app and runs the unit tests on a simulator. Needs the private SDK checked out next to this repo;
+# it runs only when the read-only deploy key secret TIANTING_SDK_SWIFT_DEPLOY_KEY is configured
+# (scripts/setup-ci-deploy-key.sh) and skips with a notice otherwise.
+# The end-to-end suite (XCUITest + real im-server, scripts/run-e2e.sh) does not run here: see README.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tokens.swift matches design/tokens.json
+        run: python3 -I scripts/py/gen_tokens.py --check
+      - name: Contrast and hue (AC-UI-90-3, AC-UI-90-5)
+        run: python3 -I scripts/py/check_tokens.py
+      - name: Source rules (AC-UI-22-3, AC-UI-90-2, AC-UI-90-12, AC-UI-90-15)
+        run: python3 -I scripts/py/check_sources.py
+
+  build-and-test:
+    runs-on: macos-latest
+    env:
+      HAS_KEY: ${{ secrets.TIANTING_SDK_SWIFT_DEPLOY_KEY != '' }}
+    steps:
+      - name: Deploy key not configured, skipping
+        if: env.HAS_KEY != 'true'
+        run: echo "::notice::TIANTING_SDK_SWIFT_DEPLOY_KEY is not configured; build and unit tests skipped"
+      - uses: actions/checkout@v4
+        if: env.HAS_KEY == 'true'
+        with:
+          path: tianting-ios
+      - name: Check out tianting-sdk-swift (read-only deploy key)
+        if: env.HAS_KEY == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: leetonny001/tianting-sdk-swift
+          ssh-key: ${{ secrets.TIANTING_SDK_SWIFT_DEPLOY_KEY }}
+          path: tianting-sdk-swift
+          persist-credentials: false
+      - name: Toolchain
+        if: env.HAS_KEY == 'true'
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Build the app
+        if: env.HAS_KEY == 'true'
+        working-directory: tianting-ios
+        run: |
+          xcodebuild -project Tianting.xcodeproj -scheme Tianting -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build-for-testing
+      - name: Unit tests
+        if: env.HAS_KEY == 'true'
+        working-directory: tianting-ios/Kit
+        run: |
+          device="$(xcrun simctl list devices available -j | python3 -I -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          for runtime in sorted(devices, reverse=True):
+              for d in devices[runtime]:
+                  if d["name"].startswith("iPhone"):
+                      print(d["udid"]); sys.exit(0)
+          ')"
+          xcodebuild test -scheme TiantingAppKit -destination "id=$device"

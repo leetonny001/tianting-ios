@@ -8,3 +8,4 @@ Packages/
 *.ipa
 *.dSYM.zip
 .DS_Store
+build/
