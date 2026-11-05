@@ -208,6 +208,36 @@ final class StoreTests: XCTestCase {
         XCTAssertNil(store.mute("c2c:alice:bob"), "local expiry without an unmuted event")
     }
 
+    func testGroupAllMuteBarText() async {
+        // AC-UI-41-6 (TC-UI-41-07), F-ADM-42
+        for (role, barred) in [("member", true), ("owner", false), ("admin", false)] {
+            let (m, fake, _) = await loggedIn(convs: [convFrame("group:g1", name: "群", myRole: role)])
+            let store = m.store!
+            let v = store.muteVersion
+            fake.transport.current.receive([
+                "cmd": "event", "data": ["type": "muted", "scope": "groupAll", "groupId": "g1", "mutedUntil": nil],
+            ])
+            await flush()
+            XCTAssertGreaterThan(store.muteVersion, v, role)
+            if barred {
+                XCTAssertEqual(store.mute("group:g1").map(mutedText), "群主已开启全员禁言")
+            } else {
+                XCTAssertNil(store.mute("group:g1"), role)
+            }
+            fake.transport.current.receive([
+                "cmd": "event", "data": ["type": "unmuted", "scope": "groupAll", "groupId": "g1"],
+            ])
+            await flush()
+            XCTAssertNil(store.mute("group:g1"), role)
+        }
+    }
+
+    func testGroupAllMuteFromConvsOnLogin() async {
+        // AC-UI-41-6: turned on while offline.
+        let (m, _, _) = await loggedIn(convs: [convFrame("group:g1", name: "群", myRole: "member", allMuted: true)])
+        XCTAssertEqual(m.store!.mute("group:g1").map(mutedText), "群主已开启全员禁言")
+    }
+
     func testDeletedMessageHasNoBody() async {
         // AC-UI-42-1
         let (m, fake, _) = await loggedIn(convs: [convFrame("group:g1", name: "群", maxSeq: 0)])

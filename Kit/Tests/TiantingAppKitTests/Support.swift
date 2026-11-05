@@ -47,7 +47,7 @@ final class Fake {
 
 func convFrame(
     _ convId: String, name: String = "n", maxSeq: Int64 = 0, unread: Int64 = 0, lastMsg: JSONValue = nil,
-    memberCount: Int64? = nil
+    memberCount: Int64? = nil, myRole: String? = nil, allMuted: Bool = false
 ) -> JSONValue {
     var o: [String: JSONValue] = [
         "convId": .string(convId),
@@ -56,6 +56,8 @@ func convFrame(
         "unread": .int(unread), "lastMsg": lastMsg, "updatedAt": 1,
     ]
     if let memberCount { o["memberCount"] = .int(memberCount) }
+    if let myRole { o["myRole"] = .string(myRole) }
+    if allMuted { o["allMuted"] = true }
     return .object(o)
 }
 

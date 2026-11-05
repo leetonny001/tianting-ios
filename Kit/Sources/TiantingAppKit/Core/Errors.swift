@@ -81,6 +81,14 @@ public func bannedText(until: Int64?) -> String {
     return "账号已被封禁，解封时间：\(formatDateTime(until))"
 }
 
+/// The group-wide mute bar (F-UI-41 rule 3, AC-UI-41-6).
+public let groupAllMutedText = "群主已开启全员禁言"
+
+/// The bar for a mute: a group-wide mute has no end time.
+public func mutedText(_ mute: MuteInfo) -> String {
+    mute.scope == .groupAll ? groupAllMutedText : mutedText(mute.mutedUntil)
+}
+
 /// The mute bar (F-UI-41 rule 3).
 public func mutedText(_ until: Until) -> String {
     switch until {

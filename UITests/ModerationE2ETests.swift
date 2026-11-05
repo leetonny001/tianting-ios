@@ -34,6 +34,43 @@ final class ModerationE2ETests: E2ECase {
         _ = g
     }
 
+    func testGroupAllMuteBarForMemberAndRecovery() async throws {
+        // AC-UI-41-6, AC-ADM-42-1, AC-ADM-42-2
+        let (me, owner, g) = (uid("u"), uid("o"), uid("g"))
+        _ = try await peer(owner)
+        try await admin("POST", "/admin/users/import", ["users": [["userId": me]]])
+        try await signed("POST", "/admin/groups", ["groupId": g, "name": "全员群", "members": [me, owner], "owner": owner])
+        try await launchAndLogin(me)
+        try await see(conv("全员群"))
+        conv("全员群").tap()
+        try await see(composer)
+
+        try await signed("POST", "/admin/mute", ["scope": "groupAll", "groupId": g, "reason": "e2e"])
+        try await see("composer-disabled", timeout: 3)
+        XCTAssertEqual(label("composer-disabled"), "群主已开启全员禁言")
+        XCTAssertFalse(composer.exists)
+
+        try await signed("POST", "/admin/unmute", ["scope": "groupAll", "groupId": g, "reason": "e2e"])
+        try await see(composer, timeout: 3)
+        try await send("恢复了")
+        try await sent("恢复了")
+    }
+
+    func testGroupAllMuteDoesNotBlockOwner() async throws {
+        // F-ADM-42: the owner gets the event but keeps the composer and can send.
+        let (me, other, g) = (uid("o"), uid("m"), uid("g"))
+        try await admin("POST", "/admin/users/import", ["users": [["userId": me], ["userId": other]]])
+        try await signed("POST", "/admin/groups", ["groupId": g, "name": "群主群", "members": [me, other], "owner": me])
+        try await signed("POST", "/admin/mute", ["scope": "groupAll", "groupId": g, "reason": "e2e"])
+        try await launchAndLogin(me)
+        try await see(conv("群主群"))
+        conv("群主群").tap()
+        try await see(composer)
+        XCTAssertFalse(app.descendants(matching: .any)["composer-disabled"].exists)
+        try await send("群主发言")
+        try await sent("群主发言")
+    }
+
     func testGroupMuteOnlyThatGroupAndPermanentText() async throws {
         // AC-UI-41-2, AC-UI-41-5
         let (me, bob) = (uid("u"), uid("b"))

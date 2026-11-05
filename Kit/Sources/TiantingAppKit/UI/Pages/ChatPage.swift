@@ -325,7 +325,7 @@ private struct ChatContent: View {
         } else if let block {
             disabledBar(block.bar)
         } else if let mute = store.mute(convId) {
-            disabledBar(mutedText(mute.mutedUntil))
+            disabledBar(mutedText(mute))
         } else {
             Composer(text: $text, emojiOpen: $emojiOpen, handle: handle, onSend: send)
         }
