@@ -137,7 +137,7 @@ final class ModerationE2ETests: E2ECase {
             .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)))
         try await sleep(500)
         XCTAssertTrue(el("kicked-dialog").exists, "swipe down")
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)).tap()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
         try await sleep(500)
         XCTAssertTrue(el("kicked-dialog").exists, "tap outside")
         capture("kicked-dialog")
