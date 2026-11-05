@@ -178,6 +178,9 @@ private struct ChatContent: View {
                 }
                 .padding(.horizontal, TS.s3)
                 .padding(.vertical, TS.s2)
+                // A new stack for the first row. With `defaultScrollAnchor(.bottom)` the stack that was empty can reserve the
+                // row's space and not draw it until the next scroll (seen on iOS 27): the first message stays invisible.
+                .id(messages.isEmpty)
             }
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)

@@ -38,6 +38,26 @@ final class ChatE2ETests: E2ECase {
         try await gone(el("tab-badge"))
     }
 
+    func testFirstMessageShowsWithoutScrolling() async throws {
+        // A group already on the list: sending changes nothing else on the page, so only the new row can show it. No
+        // scrolling here; the server has the message whether or not the row appears.
+        let (me, bob) = (uid("a"), uid("b"))
+        let peerBob = try await peer(bob)
+        let g = try await hostedGroup(name: "首条消息", members: [me, bob])
+        try await launchAndLogin(me)
+        try await see(conv("首条消息"))
+        conv("首条消息").tap()
+        try await send("第一条")
+        try await sent("第一条")
+        try await until("peer gets it") { peerBob.messages(g.convId).contains { $0.body.text == "第一条" } }
+        let m = message("第一条")
+        XCTAssertTrue(m.isHittable)
+        // A short list sits right above the input area, under the navigation bar.
+        XCTAssertLessThanOrEqual(m.frame.maxY, composer.frame.minY)
+        XCTAssertLessThan(composer.frame.minY - m.frame.maxY, 40)
+        XCTAssertGreaterThan(m.frame.minY, app.navigationBars.firstMatch.frame.maxY)
+    }
+
     func testChatInfoPageSetsActiveToNil() async throws {
         // AC-UI-06-7: on the info page a new message counts as unread.
         let (me, bob) = (uid("a"), uid("b"))

@@ -345,6 +345,8 @@ class E2ECase: XCTestCase {
         try await see(composer)
         try await focus(composer)
         composer.typeText(text)
+        // An empty composer below means sent only if the text got in first: otherwise the check holds without any send.
+        try await until("composer holds \(text)") { (self.composer.value as? String) == text }
         try await sleep(300)
         try await tap("send-button") { (self.composer.value as? String ?? "").isEmpty }
     }
