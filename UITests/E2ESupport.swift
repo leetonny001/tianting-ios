@@ -318,7 +318,12 @@ class E2ECase: XCTestCase {
         try await see("login-username")
         try await type(userId, into: "login-username")
         if let nickname { try await type(nickname, into: "login-nickname") }
-        try await tap("login-submit")
+        // On a small screen with large text the keyboard covers the button; the keyboard's "go" key does the same.
+        if el("login-submit").isHittable {
+            try await tap("login-submit")
+        } else {
+            el(nickname == nil ? "login-username" : "login-nickname").typeText("\n")
+        }
         try await see("tab-chats")
     }
 

@@ -379,7 +379,7 @@ final class ChatE2ETests: E2ECase {
         try await see(copy)
         XCTAssertFalse(app.buttons["重发"].exists, "sent messages only have copy")
         XCTAssertFalse(app.buttons["删除"].exists)
-        copy.tap()
+        try await tapMenuItem("复制")
         try await see("toast")
         XCTAssertEqual(label("toast"), "已复制")
         try await sleep(2500)

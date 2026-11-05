@@ -855,6 +855,7 @@ struct GroupNewPage: View {
     }
 
     private func askName() {
+        guard selected.count >= minGroupPick else { return }
         let members = selected
         let model = model
         let store = store

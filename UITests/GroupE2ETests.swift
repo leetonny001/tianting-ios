@@ -22,17 +22,27 @@ final class GroupE2ETests: E2ECase {
         // AC-UI-35-2, AC-UI-35-3
         try await see("pick-done")
         let row = { (u: String) in self.el("pick-row", labelContains: u) }
-        try await see(row(bob))
-        row(bob).tap()
-        XCTAssertFalse(el("pick-done").isEnabled, "one person is not enough")
+        func pick(_ u: String) async throws {
+            try await see(row(u))
+            for attempt in 0..<4 {
+                row(u).tap()
+                try await sleep(600)
+                if (row(u).value as? String) == "selected" { return }
+                print("E2E-LOST-TAP pick-row attempt \(attempt)")
+            }
+            XCTFail("could not pick \(u)")
+        }
+        try await pick(bob)
+        try await until("one picked") { self.el("pick-done").label.contains("1") }
+        el("pick-done").tap()  // One person is not enough (AC-UI-35-2).
+        try await staysGone(el("group-name-sheet"))
         try await type(String(carol.prefix(1)).uppercased() + carol.dropFirst(), into: "pick-search")
         try await see(row(carol))
         try await gone(row(dave))
-        row(carol).tap()
+        try await pick(carol)
         try await clearAndType("", into: "pick-search")
-        try await see(row(dave))
-        row(dave).tap()
-        XCTAssertTrue(el("pick-done").label.contains("3"))
+        try await pick(dave)
+        try await until("three picked") { self.el("pick-done").label.contains("3") }
 
         // AC-UI-35-1
         try await tap("pick-done")
