@@ -79,6 +79,8 @@ def main():
             src = f.read()
         for m in re.finditer(r'(?:tap|see|label|gone|el|all)\("([a-z][a-z0-9-]+)"\)', src):
             tid = m.group(1)
+            if tid.endswith("-scrim"):  # DialogLayer builds these from the dialog's id.
+                tid = tid[: -len("-scrim")]
             if '"%s"' % tid in app_text or "%s-" % tid.rsplit("-", 1)[0] in app_text:
                 continue
             problems.append("%s: test uses unknown id %s" % (os.path.relpath(path, ROOT), tid))

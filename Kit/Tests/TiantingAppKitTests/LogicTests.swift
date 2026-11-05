@@ -224,6 +224,25 @@ final class ChatLogicTests: XCTestCase {
         XCTAssertEqual(overLimitCount(String(repeating: "😀", count: 5001)), 1)
     }
 
+    func testConvIdVectors() throws {
+        // AC-UI-33-13, AC-UI-33-1, AC-UI-33-2: the route check, with the shared cases.
+        let data = try Data(contentsOf: sdkProtocolDir.appendingPathComponent("vectors/convid.json"))
+        let root = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let me = root["self"] as! String
+        let cases = root["cases"] as! [[String: Any]]
+        XCTAssertGreaterThan(cases.count, 10)
+        for c in cases {
+            let id = c["convId"] as! String
+            if let ok = c["ok"] as? [String: String] {
+                let parsed = try parseConvIdStrict(id, me: me)
+                XCTAssertEqual(parsed.to, ok["to"], id)
+                XCTAssertEqual(parsed.convType.rawValue, ok["convType"], id)
+            } else {
+                XCTAssertThrowsError(try parseConvIdStrict(id, me: me), id)
+            }
+        }
+    }
+
     func testStatusValue() {
         XCTAssertEqual(messageStatusValue(.queued), "排队中")
         XCTAssertEqual(messageStatusValue(.failed), "发送失败")

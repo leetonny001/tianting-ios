@@ -727,6 +727,7 @@ private struct MembersContent: View {
     }
 
     private func confirmKick() {
+        guard !picked.isEmpty else { return }
         let ids = picked
         model.hub.confirm(id: "kick-confirm", text: "确定将 \(ids.count) 人移出群聊？", ok: "移出", danger: true) {
             run("groupKick", thenView: true) {
@@ -966,7 +967,7 @@ private struct InviteContent: View {
     }
 
     private func invite() {
-        guard !busy else { return }
+        guard !busy, !selected.isEmpty else { return }
         busy = true
         Task {
             do {
