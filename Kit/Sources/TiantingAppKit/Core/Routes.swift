@@ -38,7 +38,15 @@ public enum Route: Hashable, Sendable {
     case privacy
     case appearance
     case notices
+    case accountSecurity
+    case security(SecurityAction)
+    case editNickname
     case privacyNotice
+}
+
+/// The password forms of "账号安全" (F-ACC-04, F-ACC-05, F-ACC-08).
+public enum SecurityAction: String, Hashable, Sendable {
+    case changePassword, regenerateCode, logoutOthers, deleteAccount
 }
 
 public enum AppTab: String, Hashable, Sendable, CaseIterable {

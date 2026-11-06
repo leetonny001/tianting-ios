@@ -111,6 +111,9 @@ private struct RouteView: View {
         case .privacy: PrivacyPage()
         case .appearance: AppearancePage()
         case .notices: NoticesPage()
+        case .accountSecurity: AccountSecurityPage()
+        case .security(let action): SecurityFormPage(action: action)
+        case .editNickname: EditNicknamePage()
         case .privacyNotice: PrivacyNoticePage()
         }
     }

@@ -53,6 +53,13 @@ struct MePage: View {
                 .padding(.horizontal, TS.s3)
                 .padding(.top, TS.s3)
                 VStack(spacing: 0) {
+                    if model.session?.mode == .account {
+                        RowButton(id: "me-edit-nickname", action: { model.push(.editNickname) }) {
+                            Text("修改昵称").font(TTFont.body).foregroundStyle(TC.textPrimary)
+                            Spacer()
+                            Icon(name: .forward, size: 16).foregroundStyle(TC.textTertiary)
+                        }
+                    }
                     RowButton(id: "me-settings", action: { model.push(.settings) }) {
                         Icon(name: .settings).foregroundStyle(TC.textSecondary)
                         Text("设置").font(TTFont.body).foregroundStyle(TC.textPrimary)
@@ -106,6 +113,10 @@ struct SettingsPage: View {
                     model.push(.blocks)
                 }
                 row("外观", id: "settings-appearance") { model.push(.appearance) }
+                // A demo session has no account to secure (AC-ACC-07-8, AC-ACC-03-18).
+                if model.session?.mode == .account {
+                    row("账号安全", id: "settings-security") { model.push(.accountSecurity) }
+                }
                 VStack(alignment: .leading, spacing: TS.s1) {
                     Text("关于天听").font(TTFont.body).foregroundStyle(TC.textPrimary)
                     Text(verbatim: "版本 \(model.config.version)（构建 \(model.config.build)）")
