@@ -460,7 +460,8 @@ final class AccountModelTests: XCTestCase {
         XCTAssertNil(m.hub.toast)
         for (kind, text) in [
             ("recoveryCodeRegenerated", "你的恢复码已重新生成"), ("refreshReplay", "检测到你的账号登录凭证异常"),
-            ("refreshRateLimited", "你的账号登录凭证刷新过于频繁"),
+            ("refreshRateLimited", "你的账号登录凭证刷新过于频繁"), ("newIpPrefix", "你的账号正在新的网络使用"),
+            ("passwordChanged", "你的账号密码已被修改"), ("passwordRecovered", "你的账号已通过恢复码重设密码"),
         ] {
             fake.transport.current.receive([
                 "cmd": "event", "data": ["type": "securityNotice", "kind": .string(kind), "at": 1, "platform": "android"],
