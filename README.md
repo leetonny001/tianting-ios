@@ -42,6 +42,8 @@ swift scripts/gen-app-icon.swift App/Assets.xcassets/AppIcon.appiconset/AppIcon.
 
 系统通知（PRD-ui F-UI-44、PRD-live F-PUSH-12）：横幅、`我 → 系统通知`列表、未查看数都在 `Model/NoticeStore.swift` 和 `UI/Pages/NoticePages.swift`。列表只在内存，重启后只有本次打开以来收到的；UserDefaults 只有 `ui.noticeSeen.{userId}` 这一个数字，退出登录时删除，被踢时保留。推送游标由 SDK 放在 Application Support 的独立文件里，不随退出登录删除。`scripts/e2e-server.sh` 用 `IM_PUSH_ENABLED=1` 启动服务端。
 
+账号（PRD-chat C1）：`AppModel` 持有一个 `AccountClient`（进程内一个，"待退出"在它那里），每次登录一个 `IMClient`。登录页由 `GET /v1/config` 决定入口，失败不猜测模式；保存恢复码页在根视图替换全部内容，下面没有页面，返回手势没有去处。`UITests/AccountFakeServerTests.swift` 用测试进程里的假服务端（`UITests/AccountSupport.swift`，HTTP + WebSocket）覆盖真实服务端不能按需产生的状态，`UITests/AccountE2ETests.swift` 连真实 im-server。
+
 端到端用例的"另一个账号"是测试进程里的真实 `IMClient`：一台模拟器不能同时跑两份同一个 App。测试调用的服务端密钥由 `scripts/e2e-server.sh` 每次随机生成，只在本机临时目录。
 
 真机运行要在 Xcode 里给 target 选签名团队（工程里没写）。服务器地址：Debug 默认 `http://localhost:8080`，可以用启动环境变量 `TIANTING_SERVER` 改；Release 的 `TTServerURL` 留空，等正式接入方式定了再填（PRD-ui F-UI-03）。
@@ -52,7 +54,8 @@ swift scripts/gen-app-icon.swift App/Assets.xcassets/AppIcon.appiconset/AppIcon.
 - **图标**来自 Lucide（ISC，`LICENSES/lucide.txt`），模板渲染，跟随前景色。
 - **`accessibilityIdentifier`** 和 Web 的 `data-testid` 同名。消息元素的状态放在 `accessibilityValue`（`排队中`、`发送中`、`已发送`、`发送失败`）。
 - **日志**只有 `TTLog`：入参是字面量和错误码，传不进消息、token、备注；SDK 用 `SilentLogger`。
-- **token** 只在 Keychain，不进 UserDefaults、URL、日志。UserDefaults 只有 `ui.` 前缀的键。
+- **token** 只在 Keychain，不进 UserDefaults、URL、日志。UserDefaults 只有 `ui.` 前缀的键。Session 和"待退出"是 Keychain 里两条分开的记录（`Core/SessionStore.swift`），`clear()` 只删前者；恢复码确认前 token 不写 Keychain。
+- **测试钩子**只在 Debug 构建（`Core/TestHooks.swift`），靠启动环境变量打开，只暴露是否有值和数量，不暴露值。
 - **消息只按纯文本渲染**，头像只加载 https。
 - `Kit` 的类逐个写 `@MainActor`，不用 `.defaultIsolation(MainActor.self)`：它让类带上隔离的 deinit，在 iOS 18.5 上释放时崩溃。
 

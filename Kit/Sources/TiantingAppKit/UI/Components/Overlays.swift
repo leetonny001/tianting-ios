@@ -152,7 +152,7 @@ struct KickedDialog: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("kicked-text")
                     BlockButton(title: "确定", id: "kicked-ok") {
-                        model.logout(keepNoticeSeen: true)
+                        model.acknowledgeFatal()
                     }
                 }
                 .padding(TS.s4)
@@ -166,5 +166,29 @@ struct KickedDialog: View {
         }
         .interactiveDismissDisabled()
         .presentationBackground(.clear)
+    }
+}
+
+/// `TT_TEST_STATE=1` in a debug build: what the Keychain holds, as yes or no and a count, for tests that must see "确认前没有落盘"
+/// (the test process cannot read the app's Keychain).
+struct TestStateProbe: View {
+    @State private var value = ""
+
+    var body: some View {
+        if TestHooks.exposesState {
+            Color.clear.frame(width: 1, height: 1)
+                .accessibilityElement()
+                .accessibilityIdentifier("test-state")
+                .accessibilityValue(value)
+                .task {
+                    let store = KeychainSessionStore()
+                    while !Task.isCancelled {
+                        #if DEBUG
+                            value = "session=\(store.isEmpty ? 0 : 1) pending=\(store.pendingCount) class=\(store.accessibleClass)"
+                        #endif
+                        try? await Task.sleep(for: .milliseconds(100))
+                    }
+                }
+        }
     }
 }

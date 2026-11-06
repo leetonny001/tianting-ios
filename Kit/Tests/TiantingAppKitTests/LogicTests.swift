@@ -83,7 +83,7 @@ final class ErrorCopyTests: XCTestCase {
         XCTAssertEqual(DemoLoginService.outcome(status: 404, data: Data()), .failure("登录服务未开启"))
         XCTAssertEqual(
             DemoLoginService.outcome(status: 200, data: Data(#"{"userId":"a","token":"t"}"#.utf8)),
-            .success(Session(userId: "a", token: "t")))
+            .success(demoSession("a", "t")))
         XCTAssertEqual(
             DemoLoginService.outcome(status: 500, data: Data(#"{"msg":"secret detail"}"#.utf8)), .failure("服务异常，请稍后重试"))
     }

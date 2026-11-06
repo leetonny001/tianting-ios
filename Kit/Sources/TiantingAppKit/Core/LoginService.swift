@@ -1,7 +1,8 @@
 import Foundation
+import TiantingIM
 
 public enum LoginOutcome: Equatable, Sendable {
-    case success(Session)
+    case success(AccountSession)
     case failure(String)
 }
 
@@ -53,6 +54,6 @@ public struct DemoLoginService: Sendable {
         guard (200..<300).contains(status), let token = r?.token, !token.isEmpty, let userId = r?.userId else {
             return .failure(errorText(r?.code ?? 5000))
         }
-        return .success(Session(userId: userId, token: token))
+        return .success(AccountSession(mode: .demo, userId: userId, accessToken: token, accessExpiresAt: 0))
     }
 }

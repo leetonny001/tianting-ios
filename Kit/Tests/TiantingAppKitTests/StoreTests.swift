@@ -7,19 +7,21 @@ import XCTest
 /// The app's state layer against the SDK with a fake transport.
 @MainActor
 final class StoreTests: XCTestCase {
-    private func model(store: SessionStore? = nil) -> (AppModel, Fake) {
+    private func model(store: AccountSessionStore? = nil) -> (AppModel, Fake) {
         let sessions = store ?? MemorySessionStore()
         let fake = Fake()
         let config = AppConfig(server: URL(string: "http://localhost:1"), demoLogin: true)
         let prefs = UIPrefs(defaults: UserDefaults(suiteName: "tt.store.\(UUID().uuidString)")!)
-        let m = AppModel(config: config, sessions: sessions, theme: ThemeController(prefs: prefs), makeClient: { _ in fake.client })
+        let m = AppModel(
+            config: config, sessions: sessions, theme: ThemeController(prefs: prefs), makeClient: { _ in fake.client },
+            makeAccount: { _, s in fakeAccount(store: s, clock: fake.clock) })
         return (m, fake)
     }
 
     private func loggedIn(convs: [JSONValue] = []) async -> (AppModel, Fake, MemorySessionStore) {
         let sessions = MemorySessionStore()
         let (m, fake) = model(store: sessions)
-        m.login(Session(userId: "alice", token: "tok"))
+        await m.login(demoSession("alice", "tok"))
         let c = fake.transport.current
         c.open()
         c.ack("auth", ["userId": "alice", "serverTime": .int(fake.clock.now())])
@@ -45,15 +47,17 @@ final class StoreTests: XCTestCase {
     func testLoginStoresAndLogoutClears() async {
         // AC-UI-16-3, AC-UI-18-3
         let (m, fake, sessions) = await loggedIn()
-        XCTAssertEqual(sessions.session?.token, "tok")
+        XCTAssertEqual(sessions.saved?.accessToken, "tok")
+        XCTAssertEqual(sessions.saved?.mode, .demo)
         m.drafts.put("c", "x")
         m.push(.settings)
         m.logout()
-        XCTAssertNil(sessions.session)
         XCTAssertNil(m.session)
         XCTAssertNil(m.store)
         XCTAssertEqual(m.path, [])
         XCTAssertNil(m.drafts.draft("c"))  // AC-UI-24-4
+        await m.logoutFinished()
+        XCTAssertNil(sessions.saved)
         XCTAssertEqual(fake.transport.current.closedWith?.code, 1000)
     }
 
@@ -70,9 +74,10 @@ final class StoreTests: XCTestCase {
         let before = fake.transport.connections.count
         fake.clock.advance(60_000)
         XCTAssertEqual(fake.transport.connections.count, before, "does not reconnect")
-        m.logout()
-        XCTAssertNil(sessions.session)
+        m.acknowledgeFatal()
         XCTAssertNil(m.fatal)
+        await m.logoutFinished()
+        XCTAssertNil(sessions.saved)
     }
 
     func testSendFailureToastsOnceExceptSilentCodes() async {
@@ -298,7 +303,7 @@ final class StoreTests: XCTestCase {
         m.handle(url: URL(string: "tianting://chat/c2c%3Aalice%3Abob")!)
         XCTAssertEqual(m.path, [])
         XCTAssertEqual(m.pendingDestination?.path, [.chat("c2c:alice:bob")])
-        m.login(Session(userId: "alice", token: "t"))
+        await m.login(demoSession("alice", "t"))
         XCTAssertEqual(m.path, [.chat("c2c:alice:bob")])
         XCTAssertNil(m.pendingDestination)
         _ = fake
@@ -309,9 +314,10 @@ final class StoreTests: XCTestCase {
     }
 
     func testRestoreUsesStoredSession() async {
-        let sessions = MemorySessionStore(Session(userId: "alice", token: "tok"))
+        let sessions = MemorySessionStore()
+        sessions.saved = demoSession("alice", "tok")
         let (m, fake) = model(store: sessions)
-        m.restore()
+        await m.restore()
         XCTAssertEqual(m.session?.userId, "alice")
         XCTAssertEqual(fake.transport.connections.count, 1)
         fake.transport.current.open()

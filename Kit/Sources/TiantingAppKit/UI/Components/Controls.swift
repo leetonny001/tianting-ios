@@ -127,6 +127,50 @@ struct TTTextField: View {
     }
 }
 
+/// A password input, same frame as `TTTextField`. Nothing about it is logged or kept beyond the page's state.
+struct TTSecureField: View {
+    let placeholder: String
+    @Binding var text: String
+    var id: String?
+    /// The user chooses a new password here. iOS decides from the whole form that this is a sign-up and may cover the field
+    /// with Automatic Strong Password, whatever `.newPassword` or `.password` says; keys after the first are then lost and
+    /// one character gets submitted. `.oneTimeCode` is what turns that cover off.
+    var choosesNew = false
+    var submit: SubmitLabel = .done
+    var onSubmit: () -> Void = {}
+
+    var body: some View {
+        SecureField("", text: $text, prompt: Text(placeholder).foregroundStyle(TC.textTertiary))
+            .font(TTFont.body)
+            .foregroundStyle(TC.textPrimary)
+            .textContentType(choosesNew ? .oneTimeCode : .password)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .submitLabel(submit)
+            .onSubmit(onSubmit)
+            .padding(.horizontal, TS.s3)
+            .padding(.vertical, TS.s2)
+            .frame(minHeight: Tokens.Size.touchMin)
+            .background(TC.surface, in: RoundedRectangle(cornerRadius: TR.md))
+            .overlay(RoundedRectangle(cornerRadius: TR.md).stroke(TC.borderInput, lineWidth: 1))
+            .accessibilityLabel(placeholder)
+            .optionalIdentifier(id)
+    }
+}
+
+/// A label above an input.
+struct LabeledField<Field: View>: View {
+    let label: String
+    @ViewBuilder let field: () -> Field
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: TS.s2) {
+            Text(label).font(TTFont.small).foregroundStyle(TC.textSecondary)
+            field()
+        }
+    }
+}
+
 /// Bordered multi-line input.
 struct TTTextEditor: View {
     @Binding var text: String

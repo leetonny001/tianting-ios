@@ -5,7 +5,8 @@ import Foundation
 public struct AppConfig: Sendable {
     /// `http(s)://host:port`, the base of `/demo/login` and `/ws`. nil when the build has no server.
     public var server: URL?
-    /// Demo login is the only login of the first phase (PRD-ui F-UI-03); off in release builds.
+    /// The build's switch for demo login: an upper limit, `GET /v1/config` has to say yes as well (F-ACC-07 rule 4). Off in
+    /// release builds.
     public var demoLogin: Bool
     public var version: String
     public var build: String
@@ -28,12 +29,20 @@ public struct AppConfig: Sendable {
                 server = url
                 demo = true
             }
+            if env["TT_BUILD_DEMO_LOGIN"] == "0" { demo = false }  // TC-ACC-07-07.
         #endif
         return AppConfig(
             server: server,
             demoLogin: demo,
             version: bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0",
             build: bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0")
+    }
+
+    /// The base of `/v1/*`, without a trailing slash.
+    public var apiBase: String {
+        var s = server?.absoluteString ?? "https://invalid.invalid"
+        while s.hasSuffix("/") { s.removeLast() }
+        return s
     }
 
     /// `ws(s)://host:port/ws`.

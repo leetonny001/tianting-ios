@@ -6,8 +6,9 @@ public struct TiantingRootView: View {
     @State private var model: AppModel
 
     public init() {
-        Self.resetForTestsIfAsked()
-        _model = State(initialValue: AppModel(config: .load(), sessions: KeychainSessionStore()))
+        let sessions = KeychainSessionStore()
+        Self.prepareForTestsIfAsked(sessions)
+        _model = State(initialValue: AppModel(config: .load(), sessions: sessions))
     }
 
     init(model: AppModel) {
@@ -16,22 +17,30 @@ public struct TiantingRootView: View {
 
     /// UI tests start from a clean device state. Debug builds only.
     private static var didReset = false
-    private static func resetForTestsIfAsked() {
+    private static func prepareForTestsIfAsked(_ sessions: KeychainSessionStore) {
         #if DEBUG
-            guard !didReset, ProcessInfo.processInfo.environment["TT_RESET_STATE"] == "1" else { return }
+            guard !didReset else { return }
             didReset = true
-            KeychainSessionStore().clear()
-            UIPrefs().set(ThemeController.key, nil)
-            try? FileManager.default.removeItem(at: FilePushCursorStore.defaultDirectory)
-            if let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-                try? FileManager.default.removeItem(at: dir.appendingPathComponent("tianting"))
+            if ProcessInfo.processInfo.environment["TT_RESET_STATE"] == "1" {
+                sessions.wipe()
+                UIPrefs().removeAll()
+                try? FileManager.default.removeItem(at: FilePushCursorStore.defaultDirectory)
+                if let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+                    try? FileManager.default.removeItem(at: dir.appendingPathComponent("tianting"))
+                }
             }
+            if let legacy = TestHooks.legacySession { sessions.seedLegacySession(userId: legacy.userId, token: legacy.token) }
         #endif
     }
 
     public var body: some View {
         Group {
-            if let store = model.store {
+            // The save page replaces everything, so there is no page under it for a back gesture to reach (AC-ACC-01-12).
+            if model.recovery != nil {
+                RecoveryCodePage()
+            } else if model.booting {
+                TC.bg.ignoresSafeArea()
+            } else if let store = model.store {
                 LoggedInView()
                     .environment(store)
                     .id(model.loginId)
@@ -40,14 +49,19 @@ public struct TiantingRootView: View {
             }
         }
         .overlay { ToastLayer() }
+        .overlay(alignment: .topLeading) { TestStateProbe() }
         .environment(model)
         .background(TC.bg.ignoresSafeArea())
         .tint(TC.brand)
+        // At the root: a session can end on the login page or the save page too.
+        .fullScreenCover(item: Binding(get: { model.fatal.map(FatalItem.init) }, set: { _ in })) { item in
+            KickedDialog(reason: item.reason).environment(model)
+        }
         .onAppear {
-            model.restore()
             // Windows exist once the first frame is on its way.
             DispatchQueue.main.async { model.theme.apply() }
         }
+        .task { await model.restore() }
         .onOpenURL { model.handle(url: $0) }
     }
 }
@@ -66,9 +80,6 @@ private struct LoggedInView: View {
             }
             NoticeBannerLayer()
             DialogLayer()
-        }
-        .fullScreenCover(item: Binding(get: { model.fatal.map(FatalItem.init) }, set: { _ in })) { item in
-            KickedDialog(reason: item.reason).environment(model)
         }
     }
 }
@@ -100,6 +111,7 @@ private struct RouteView: View {
         case .privacy: PrivacyPage()
         case .appearance: AppearancePage()
         case .notices: NoticesPage()
+        case .privacyNotice: PrivacyNoticePage()
         }
     }
 }

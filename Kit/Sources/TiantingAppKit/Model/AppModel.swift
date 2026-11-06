@@ -3,18 +3,45 @@ import Network
 import Observation
 import SwiftUI
 import TiantingIM
+import UIKit
 
-/// The running app: session, SDK client, navigation. One `IMClient` per login; logging out replaces it.
+/// Who is logged in. Tokens stay with `AccountClient`.
+public struct SessionInfo: Sendable, Equatable {
+    public var userId: String
+    public var mode: SessionMode
+}
+
+/// The save page's content (F-ACC-05 rule 1). `code` nil: the newest generation has no code on this device, the user asks
+/// for a new one with the password. Memory only.
+public struct RecoveryPrompt: Equatable {
+    public var code: String?
+    public var gen: Int64?
+}
+
+/// `GET /v1/config` for the login page: a failure guesses nothing (F-ACC-07 rule 4).
+public enum ConfigState: Equatable {
+    case loading, failed
+    case loaded(AccountConfig)
+}
+
+/// The running app: session, SDK clients, navigation. One `AccountClient` for the process (it keeps the pending logouts);
+/// one `IMClient` per login, and logging out replaces it.
 @MainActor
 @Observable
 public final class AppModel {
-    public private(set) var session: Session?
+    public private(set) var session: SessionInfo?
     public private(set) var store: IMStore?
     /// This login's system notices (F-UI-44).
     public private(set) var notices: NoticeStore?
     public private(set) var drafts = DraftStore()
     /// Kicked or the login ended: the dialog that cannot be dismissed (F-UI-18).
     public private(set) var fatal: FatalReason?
+    /// Blocks everything until the code is confirmed (AC-ACC-01-12, F-ACC-05 rule 1).
+    public private(set) var recovery: RecoveryPrompt?
+    /// The stored session has not been read yet: neither the login page nor the list.
+    public private(set) var booting = true
+    public private(set) var loginConfig: ConfigState = .loading
+    public private(set) var cachedConfig: CachedConfig?
     public var tab: AppTab = .chats
     public var path: [Route] = []
     /// Bumped to scroll the conversation list to the top (F-UI-01 rule 4).
@@ -27,27 +54,36 @@ public final class AppModel {
     public let config: AppConfig
     public let hub = UIHub()
     public let theme: ThemeController
-    @ObservationIgnored private let sessions: SessionStore
+    public let account: AccountClient
+    @ObservationIgnored private let sessions: AccountSessionStore
     @ObservationIgnored private let prefs: UIPrefs
     @ObservationIgnored private let makeClient: (AppConfig) -> IMClient
     @ObservationIgnored private let monitor = NWPathMonitor()
+    @ObservationIgnored private var accountSubscription: IMSubscription?
+    @ObservationIgnored private var logoutTask: Task<Void, Never>?
+    @ObservationIgnored private var restored = false
+    @ObservationIgnored private var askNoticeOnEnter = false
     /// Each login gets its own navigation state and page state.
     public private(set) var loginId = 0
 
     public init(
         config: AppConfig,
-        sessions: SessionStore,
+        sessions: AccountSessionStore,
         theme: ThemeController = ThemeController(),
         prefs: UIPrefs = UIPrefs(),
-        makeClient: ((AppConfig) -> IMClient)? = nil
+        makeClient: ((AppConfig) -> IMClient)? = nil,
+        makeAccount: ((AppConfig, AccountSessionStore) -> AccountClient)? = nil
     ) {
         self.config = config
         self.sessions = sessions
         self.theme = theme
         self.prefs = prefs
         self.makeClient = makeClient ?? AppModel.liveClient
+        account = makeAccount?(config, sessions) ?? AppModel.liveAccount(config, sessions)
+        cachedConfig = prefs.get(Self.configKey).flatMap { try? JSONDecoder().decode(CachedConfig.self, from: Data($0.utf8)) }
+        accountSubscription = account.on { [weak self] in self?.handle($0) }
         monitor.pathUpdateHandler = { [weak self] path in
-            let online = path.status == .satisfied
+            let online = path.status == .satisfied && !TestHooks.forceOffline
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.online = online } }
         }
         monitor.start(queue: DispatchQueue(label: "tianting.app.network"))
@@ -57,74 +93,273 @@ public final class AppModel {
         monitor.cancel()
     }
 
+    private static func databaseDirectory() -> URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("tianting", isDirectory: true)
+    }
+
     private static func liveClient(_ config: AppConfig) -> IMClient {
         var options = IMClientOptions(url: config.webSocketURL ?? "wss://invalid.invalid/ws")
         options.platform = .ios
-        options.databaseDirectory = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("tianting", isDirectory: true)
+        options.databaseDirectory = databaseDirectory()
         return IMClient(options: options)
     }
 
-    /// Cold start: picks up a stored session and reconnects (PRD-ui 3.4).
-    public func restore() {
-        guard session == nil, let saved = sessions.load() else { return }
-        begin(saved)
+    private static func liveAccount(_ config: AppConfig, _ sessions: AccountSessionStore) -> AccountClient {
+        var options = AccountClientOptions(baseUrl: config.apiBase)
+        options.platform = .ios
+        options.deviceName = UIDevice.current.model
+        options.store = sessions
+        options.unregisterSystemPushToken = { UIApplication.shared.unregisterForRemoteNotifications() }
+        return AccountClient(options: options)
     }
 
-    public func login(_ newSession: Session) {
-        sessions.save(newSession)
+    // MARK: Session
+
+    /// Cold start: picks up a stored session and connects (PRD-ui 3.4, F-ACC-03 rule 5). An expired access token refreshes
+    /// first inside the SDK; the list shows from the cache meanwhile. No session: nothing to connect (K7).
+    public func restore() async {
+        guard !restored else { return }
+        restored = true
+        defer { booting = false }
+        // A throw is a locked Keychain or the like: not logged in for now, and nothing gets cleared.
+        _ = try? await account.start()
+        guard account.session != nil else {
+            // Killed during a logout, before the client cleaned up after itself.
+            if let dir = Self.databaseDirectory() { try? FileManager.default.removeItem(at: dir) }
+            return
+        }
+        enterSession()
+        refreshCachedConfig()
+    }
+
+    /// Demo login: no refresh token, nothing for the SDK to refresh (F-ACC-07).
+    public func login(_ demo: AccountSession) async {
+        await logoutFinished()
+        try? await sessions.save(demo)
+        account.restore(demo)
         fatal = nil
-        begin(newSession)
+        enterSession()
+    }
+
+    /// An account session was adopted: the IM connection starts, unless the recovery code still has to be saved.
+    private func accept(_ result: AuthResult, askNotice: Bool) {
+        askNoticeOnEnter = askNotice
+        if let code = result.recoveryCode, let gen = result.recoveryCodeGen {
+            recovery = RecoveryPrompt(code: code, gen: gen)
+            return
+        }
+        if store == nil { enterSession() }
+    }
+
+    private func enterSession() {
+        guard let s = account.session else { return }  // Ended meanwhile: connecting now would only say so again (K7).
+        begin(s)
         if let next = pendingDestination {
             pendingDestination = nil
             go(next)
         }
+        if askNoticeOnEnter {
+            askNoticeOnEnter = false
+            askNoticeIfUpdated(s.userId)
+        }
     }
 
-    private func begin(_ newSession: Session) {
+    private func begin(_ s: AccountSession) {
         let client = makeClient(config)
-        let store = IMStore(client: client, me: newSession.userId)
-        store.onFatal = { [weak self] reason in self?.fatal = reason }
+        let store = IMStore(client: client, me: s.userId)
+        store.onFatal = { [weak self] reason in self?.stop(reason) }
         store.onSendFailed = { [weak self] _, _, error in
             // 4035 / 4036 / 4137 insert a tip in the chat page (F-UI-31), 4031 has the bar (F-UI-41 rule 5);
             // timeouts and kicks show nothing (F-UI-08 rule 3).
             guard case .code(let code) = error, ![4031, 4035, 4036, 4137].contains(code) else { return }
             self?.hub.show(errorText(code, cmd: "send"))
         }
+        store.onSecurityNotice = { [weak self] _ in self?.hub.show("你的账号在新设备登录") }  // AC-ACC-02-13.
         self.store = store
-        let notices = NoticeStore(client: client, userId: newSession.userId, prefs: prefs)
+        let notices = NoticeStore(client: client, userId: s.userId, prefs: prefs)
         notices.attach()  // Before connecting: with a subscriber the SDK catches up as soon as auth succeeds.
         self.notices = notices
-        session = newSession
+        session = SessionInfo(userId: s.userId, mode: s.mode)
         drafts = DraftStore()
         tab = .chats
         path = []
         loginId += 1
-        client.restoreCache(userId: newSession.userId)
-        client.connect(token: newSession.token)
+        client.restoreCache(userId: s.userId)
+        switch s.mode {
+        case .account: client.connect(tokenProvider: account.tokenProvider)
+        case .demo: client.connect(token: s.accessToken)
+        }
         TTLog.event("session.started")
     }
 
-    /// F-AUTH-05: closes with 1000, clears memory, the local database and the token; `ui.*` stays (F-UI-16 rule 3), except
-    /// the notice baseline. A kick or a dead credential keeps that too, so logging in again does not repeat reminders
-    /// (F-PUSH-12 rule 5). The push cursor is not in the local database and stays in every case (PRD-live 4.9).
+    private func handle(_ event: AccountEvent) {
+        switch event {
+        case .recoveryCodeUnacked:
+            if recovery == nil, account.session?.mode == .account { recovery = RecoveryPrompt() }  // F-ACC-05 rule 1.
+        case .ended(let end):
+            // A logout started here. A kick came as the client's fatal. With a client bound its fatal came just before this:
+            // the dialog is up, or there was nothing to say and the logout already ran. So only without a client: on the save
+            // page, or between reading the session and connecting.
+            if end.action == .logout || end.origin == .kick || fatal != nil || store != nil { return }
+            if recovery != nil || fatalNeedsDialog(.session(end)) { stop(.session(end)) }
+        case .tokens, .outcome:
+            break
+        }
+    }
+
+    /// The connection or the session stopped for good.
+    private func stop(_ reason: FatalReason) {
+        recovery = nil
+        if fatalNeedsDialog(reason) {
+            fatal = reason
+        } else {
+            logout(keepNoticeSeen: true)
+        }
+    }
+
+    /// The dialog's "确定": back to login, local data cleared (AC-ACC-04-5). A notice baseline stays (F-PUSH-12 rule 5).
+    public func acknowledgeFatal() {
+        logout(keepNoticeSeen: true)
+    }
+
+    /// F-AUTH-05: clears memory, the local database and the token at once as far as the user can see; `ui.*` stays (F-UI-16
+    /// rule 3), except the notice baseline. A kick or a dead credential keeps that too, so logging in again does not repeat
+    /// reminders (F-PUSH-12 rule 5). The push cursor is not in the local database and stays in every case (PRD-live 4.9).
+    ///
+    /// The page does not wait: `AccountClient.logout()` can hang on the network for 30 seconds (K2). It writes the pending
+    /// record and clears the stored token first, tells the server, and only then does the connection close with 1000.
     public func logout(keepNoticeSeen: Bool = false) {
         notices?.detach()
         notices = nil
         if !keepNoticeSeen, let userId = session?.userId { prefs.set(noticeSeenKey(userId), nil) }
-        store?.client.destroy()
+        let client = store?.client
         store = nil
-        sessions.clear()
         session = nil
         fatal = nil
+        recovery = nil
         drafts = DraftStore()
         path = []
         tab = .chats
         pendingDestination = nil
         hub.dismissDialog()
+        let previous = logoutTask
+        logoutTask = Task { [account] in
+            await previous?.value
+            await account.logout()
+            client?.destroy()
+        }
         TTLog.event("session.ended")
     }
+
+    /// Anything that starts a session waits for this: the logout ending would end the new session too.
+    public func logoutFinished() async {
+        await logoutTask?.value
+    }
+
+    // MARK: Account pages
+
+    public func accountLogin(username: String, password: String) async throws {
+        await logoutFinished()
+        accept(try await account.login(username: username, password: password), askNotice: true)
+    }
+
+    public func accountRegister(username: String, password: String, nickname: String?, inviteCode: String?) async throws {
+        await logoutFinished()
+        let result = try await account.register(
+            username: username, password: password, nickname: nickname, inviteCode: inviteCode)
+        // Registering agrees to the version on show (F-ACC-10 rule 2).
+        if case .loaded(let c) = loginConfig, let v = c.privacyNotice?.version { prefs.set(noticeVersionKey(result.userId), v) }
+        accept(result, askNotice: false)
+    }
+
+    public func accountRecover(username: String, recoveryCode: String, newPassword: String) async throws {
+        await logoutFinished()
+        accept(try await account.recover(username: username, recoveryCode: recoveryCode, newPassword: newPassword), askNotice: true)
+    }
+
+    public func cancelDeletion(username: String, password: String) async throws {
+        try await account.cancelDelete(username: username, password: password)
+    }
+
+    public func changePassword(old: String, new: String) async throws {
+        accept(try await account.changePassword(oldPassword: old, newPassword: new), askNotice: false)
+    }
+
+    public func logoutOthers(password: String) async throws {
+        accept(try await account.logoutOthers(password: password), askNotice: false)
+    }
+
+    public func requestRecoveryCode(password: String) async throws {
+        let r = try await account.regenerateRecoveryCode(password: password)
+        recovery = RecoveryPrompt(code: r.recoveryCode, gen: r.recoveryCodeGen)
+    }
+
+    /// "我已保存": the token reaches the Keychain only inside this call, when it was memory only (RS5-13).
+    public func confirmRecovery() async throws {
+        guard let gen = recovery?.gen else { return }
+        try await account.ackRecoveryCode(gen: gen)
+        recovery = nil
+        if store == nil { enterSession() }
+    }
+
+    // MARK: Configuration
+
+    private static let configKey = "ui.config"
+
+    /// The login page's entries. Each attempt starts from "loading", so a retry never shows a stale mode.
+    public func loadLoginConfig() async {
+        loginConfig = .loading
+        do {
+            let c = try await account.getConfig()
+            remember(c)
+            loginConfig = .loaded(c)
+        } catch {
+            loginConfig = .failed
+        }
+    }
+
+    /// Logged in: a failure keeps the last value (F-ACC-07 rule 4).
+    private func refreshCachedConfig() {
+        Task { if let c = try? await account.getConfig() { remember(c) } }
+    }
+
+    private func remember(_ c: AccountConfig) {
+        let cached = CachedConfig(c)
+        cachedConfig = cached
+        if let data = try? JSONEncoder().encode(cached) {
+            prefs.set(Self.configKey, String(decoding: data, as: UTF8.self))
+        }
+    }
+
+    /// The address behind "隐私说明" (F-ACC-10); nil hides the entries.
+    public var noticeURL: URL? {
+        if case .loaded(let c) = loginConfig, let url = privacyURL(c.privacyNotice?.url) { return url }
+        return privacyURL(cachedConfig?.privacyURL)
+    }
+
+    private func noticeVersionKey(_ userId: String) -> String { "ui.noticeVersion.\(userId)" }
+
+    /// F-ACC-10 rule 2: once per new version, and not agreeing blocks nothing. The server has no way to record it or to say
+    /// which version an account agreed to, so this device remembers (see "实现时发现的问题").
+    private func askNoticeIfUpdated(_ userId: String) {
+        let version: String?
+        if case .loaded(let c) = loginConfig { version = c.privacyNotice?.version } else { version = cachedConfig?.privacyVersion }
+        guard let version, !version.isEmpty, prefs.get(noticeVersionKey(userId)) != version else { return }
+        let key = noticeVersionKey(userId)
+        hub.present(id: "privacy-update-dialog") {
+            PrivacyUpdateDialog {
+                self.prefs.set(key, version)
+                self.hub.dismissDialog()
+            } open: {
+                self.prefs.set(key, version)
+                self.hub.dismissDialog()
+                self.push(.privacyNotice)
+            }
+        }
+    }
+
+    // MARK: Navigation
 
     public func push(_ route: Route) {
         path.append(route)

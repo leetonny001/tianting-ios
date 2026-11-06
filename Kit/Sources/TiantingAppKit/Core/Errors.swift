@@ -101,23 +101,42 @@ private let kickText: [String: String] = [
     "tokenInvalid": "登录已失效，请重新登录",
     "tokenExpired": "登录已过期，请重新登录",
     "banned": "账号已被下线",
+    // Known reasons do not depend on the close code, which a lost connection can hide.
+    "passwordChanged": "账号已被下线",
+    "sessionRevoked": "账号已被下线",
+    "accountDeleted": "账号已被下线",
     "tooManyConnections": "登录设备过多，当前设备已下线",
 ]
 
-/// The kicked dialog's copy (F-UI-18): by `kicked.reason`, then by close code.
+/// The kicked dialog's copy (F-UI-18): by `kicked.reason`, then by close code. A recovery deadline comes first for every
+/// reason that carries one (F-ACC-03 rule 6a); the session end's copy is the SDK's, the same sentence on all clients.
 public func fatalText(_ reason: FatalReason) -> String {
     let code: Int
     switch reason {
-    case .kicked(let r, let c, let until):
+    case .kicked(let r, let c, let until, let recoverBefore):
         if r == "suspended" {
             if case .at(let t)? = until { return bannedText(until: t) }
             return bannedText(until: nil)
+        }
+        if let recoverBefore, recoverBefore > 0, let s = sessionDialogText(.recoverBefore, recoverBefore: recoverBefore) {
+            return s
         }
         if let s = kickText[r] { return s }
         code = c
     case .closed(let c, _):
         code = c
+    case .session(let end):
+        if let s = end.dialogText() { return s }
+        if end.action == .banNotice { return bannedText(until: nil) }
+        return errorText(4010)
     }
     if code == 4429 { return "登录设备过多，当前设备已下线" }
     return errorText(code)
+}
+
+/// Whether a stop gets the dialog at all: a session end with nothing to tell goes straight to login (never logged in, K7;
+/// a deletion the user just asked for).
+public func fatalNeedsDialog(_ reason: FatalReason) -> Bool {
+    if case .session(let end) = reason { return end.dialog != nil || end.action == .banNotice }
+    return true
 }

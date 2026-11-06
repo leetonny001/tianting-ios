@@ -24,4 +24,11 @@ public struct UIPrefs {
             defaults.removeObject(forKey: key)
         }
     }
+
+    /// UI tests start clean.
+    func removeAll() {
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(Self.prefix) {
+            defaults.removeObject(forKey: key)
+        }
+    }
 }

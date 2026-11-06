@@ -290,12 +290,13 @@ final class NoticeStoreTests: XCTestCase {
             sessions: MemorySessionStore(),
             theme: ThemeController(prefs: prefs),
             prefs: prefs,
-            makeClient: { _ in fake.client })
+            makeClient: { _ in fake.client },
+            makeAccount: { _, s in fakeAccount(store: s, clock: fake.clock) })
         return (m, fake)
     }
 
     private func logIn(_ m: AppModel, _ fake: Fake) async {
-        m.login(Session(userId: me, token: "tok"))
+        await m.login(demoSession(me, "tok"))
         let c = fake.transport.current
         c.open()
         c.ack("auth", ["userId": .string(me), "serverTime": 1000])

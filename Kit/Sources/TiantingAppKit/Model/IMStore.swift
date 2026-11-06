@@ -38,6 +38,7 @@ public final class IMStore {
     public private(set) var groupInfos: [String: GroupInfo] = [:]
 
     public var onFatal: ((FatalReason) -> Void)?
+    public var onSecurityNotice: ((SecurityNotice) -> Void)?
     public var onSendFailed: ((String, String, SendFailure) -> Void)?
     @ObservationIgnored private var subscription: IMSubscription?
     @ObservationIgnored private var activeConv: String?
@@ -100,6 +101,12 @@ public final class IMStore {
         case .groupChanged(let groupId, let info):
             groupInfos[groupId] = info
             groupTicks[groupId, default: 0] += 1
+        case .securityNotice(let notice):
+            onSecurityNotice?(notice)
+        case .recoveryCodeUnacked:
+            break  // AppModel hears it from AccountClient, which also has it from HTTP.
+        case .profileChanged:
+            profileVersion += 1
         }
     }
 

@@ -38,6 +38,7 @@ public enum Route: Hashable, Sendable {
     case privacy
     case appearance
     case notices
+    case privacyNotice
 }
 
 public enum AppTab: String, Hashable, Sendable, CaseIterable {

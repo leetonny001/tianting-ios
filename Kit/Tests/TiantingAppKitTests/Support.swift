@@ -6,6 +6,23 @@ let sdkProtocolDir = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     .deletingLastPathComponent().appendingPathComponent("tianting-sdk-swift/protocol")
 
+func demoSession(_ userId: String, _ token: String) -> AccountSession {
+    AccountSession(mode: .demo, userId: userId, accessToken: token, accessExpiresAt: 0)
+}
+
+/// An `AccountClient` that never reaches a network or the system's events.
+@MainActor
+func fakeAccount(store: AccountSessionStore, clock: IMClock, http: HttpTransport? = nil) -> AccountClient {
+    var options = AccountClientOptions(baseUrl: "http://im.test")
+    options.platform = .ios
+    options.store = store
+    options.http = http ?? FakeHttp()
+    options.clock = clock
+    options.random = { 0.5 }
+    options.systemEvents = false
+    return AccountClient(options: options)
+}
+
 @MainActor
 func flush() async {
     for _ in 0..<60 { await Task.yield() }

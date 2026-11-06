@@ -17,7 +17,7 @@ struct CopyButton: View {
     }
 }
 
-/// Me (PRD-ui F-UI-15): no profile editing in the first phase.
+/// Me (PRD-ui F-UI-15, F-ACC-06): an account edits its nickname; the avatar comes with C2.
 struct MePage: View {
     @Environment(AppModel.self) private var model
     @Environment(IMStore.self) private var store
@@ -120,6 +120,9 @@ struct SettingsPage: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("about")
                 TC.divider.frame(height: 1)
+                if model.noticeURL != nil {
+                    row("隐私说明", id: "about-privacy") { model.push(.privacyNotice) }
+                }
                 RowButton(id: "logout", action: confirmLogout) {
                     Text("退出登录").font(TTFont.body).foregroundStyle(TC.danger)
                     Spacer()

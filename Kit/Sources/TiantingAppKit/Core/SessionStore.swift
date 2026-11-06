@@ -1,33 +1,29 @@
 import Foundation
 import Security
+import TiantingIM
 
-/// A logged-in session. The token never goes into UserDefaults, a URL or a log (NF-UI-13, PRD-ui 3.4).
-public struct Session: Sendable, Equatable, Codable {
-    public var userId: String
-    public var token: String
-
-    public init(userId: String, token: String) {
-        self.userId = userId
-        self.token = token
-    }
+/// A Keychain call failed. Holds the status only.
+public struct KeychainError: Error, Equatable {
+    public let status: Int32
 }
 
-public protocol SessionStore: Sendable {
-    func load() -> Session?
-    func save(_ session: Session)
-    func clear()
-}
-
-/// Keychain storage, this device only (PRD-ui 3.4, AC-UI-16-3).
-public struct KeychainSessionStore: SessionStore {
+/// The session and the "pending logout" records in the Keychain, this device only (F-ACC-03 rule 8, PRD-ui 3.4, AC-UI-16-3).
+/// The SDK decides when to write; this is only where. The token never goes into UserDefaults, a URL or a log (NF-UI-13).
+///
+/// The two are separate items: `clear()` removes the session and leaves the pending logouts (F-ACC-04 rule 1), which hold
+/// only `sid` and refresh token. A save overwrites in place, so a process killed halfway still has the old value, and
+/// returning means the value is written (R-CF-09). A failure throws, which keeps the SDK on the old token.
+@MainActor
+public final class KeychainSessionStore: AccountSessionStore {
     private let service: String
-    private let account = "session"
+    private let sessionAccount = "session"
+    private let pendingAccount = "pendingLogouts"
 
     public init(service: String = "com.tianting.im.session") {
         self.service = service
     }
 
-    private var query: [String: Any] {
+    private func query(_ account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -35,46 +31,102 @@ public struct KeychainSessionStore: SessionStore {
         ]
     }
 
-    public func load() -> Session? {
-        var q = query
+    private func read(_ account: String) throws -> Data? {
+        var q = query(account)
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
-        return try? JSONDecoder().decode(Session.self, from: data)
+        let status = SecItemCopyMatching(q as CFDictionary, &out)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw KeychainError(status: status) }
+        return out as? Data
     }
 
-    public func save(_ session: Session) {
-        guard let data = try? JSONEncoder().encode(session) else { return }
-        SecItemDelete(query as CFDictionary)
-        var q = query
-        q[kSecValueData as String] = data
-        q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let status = SecItemAdd(q as CFDictionary, nil)
-        if status != errSecSuccess { TTLog.requestError("keychain.save", code: Int(status)) }
+    private func write(_ account: String, _ data: Data) throws {
+        let attrs: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+        var status = SecItemUpdate(query(account) as CFDictionary, attrs as CFDictionary)
+        if status == errSecItemNotFound {
+            let q = query(account).merging(attrs) { _, new in new }
+            status = SecItemAdd(q as CFDictionary, nil)
+        }
+        guard status == errSecSuccess else {
+            TTLog.requestError("keychain.save", code: Int(status))
+            throw KeychainError(status: status)
+        }
     }
 
-    public func clear() {
-        SecItemDelete(query as CFDictionary)
+    private func remove(_ account: String) throws {
+        let status = SecItemDelete(query(account) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            TTLog.requestError("keychain.clear", code: Int(status))
+            throw KeychainError(status: status)
+        }
     }
 
-    /// Whether anything is stored, for AC-UI-16-3.
+    /// Unreadable data is no session. A locked Keychain throws: nothing gets cleared because of it.
+    public func load() async throws -> AccountSession? {
+        guard let data = try read(sessionAccount) else { return nil }
+        return try? JSONDecoder().decode(AccountSession.self, from: data)
+    }
+
+    public func save(_ session: AccountSession) async throws {
+        try write(sessionAccount, try JSONEncoder().encode(session))
+        TestHooks.savedSession()
+    }
+
+    public func clear() async throws {
+        try remove(sessionAccount)
+    }
+
+    public func loadPendingLogouts() async throws -> [PendingLogout] {
+        guard let data = try read(pendingAccount) else { return [] }
+        return (try? JSONDecoder().decode([PendingLogout].self, from: data)) ?? []
+    }
+
+    public func savePendingLogouts(_ pending: [PendingLogout]) async throws {
+        if pending.isEmpty {
+            try remove(pendingAccount)
+        } else {
+            try write(pendingAccount, try JSONEncoder().encode(pending))
+        }
+    }
+
+    /// Whether a session is stored (AC-UI-16-3, AC-ACC-05-7).
     public var isEmpty: Bool {
-        var q = query
+        var q = query(sessionAccount)
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         return SecItemCopyMatching(q as CFDictionary, nil) == errSecItemNotFound
     }
-}
 
-/// For tests.
-public final class MemorySessionStore: SessionStore, @unchecked Sendable {
-    public var session: Session?
-
-    public init(_ session: Session? = nil) {
-        self.session = session
+    /// How many pending logouts are stored; a count, nothing else.
+    public var pendingCount: Int {
+        guard let data = try? read(pendingAccount) else { return 0 }
+        return ((try? JSONDecoder().decode([PendingLogout].self, from: data)) ?? []).count
     }
 
-    public func load() -> Session? { session }
-    public func save(_ session: Session) { self.session = session }
-    public func clear() { session = nil }
+    #if DEBUG
+        /// UI tests only: `{userId, token}` as the previous version wrote it (AC-ACC-03-18), and a clean device.
+        func seedLegacySession(userId: String, token: String) {
+            let data = try? JSONEncoder().encode(["userId": userId, "token": token])
+            if let data { try? write(sessionAccount, data) }
+        }
+
+        /// `kSecAttrAccessible` of the stored session, for the UI tests (AfterFirstUnlockThisDeviceOnly is "cku").
+        var accessibleClass: String {
+            var q = query(sessionAccount)
+            q[kSecReturnAttributes as String] = true
+            q[kSecMatchLimit as String] = kSecMatchLimitOne
+            var out: CFTypeRef?
+            guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let attrs = out as? [String: Any] else { return "-" }
+            return attrs[kSecAttrAccessible as String] as? String ?? "-"
+        }
+
+        func wipe() {
+            try? remove(sessionAccount)
+            try? remove(pendingAccount)
+        }
+    #endif
 }
