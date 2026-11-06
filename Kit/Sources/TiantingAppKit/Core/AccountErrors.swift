@@ -88,6 +88,18 @@ public func sessionDate(_ ms: Int64) -> String {
     return f.string(from: Date(timeIntervalSince1970: TimeInterval(ms) / 1000))
 }
 
+/// The toast for a `securityNotice`. The new device line is the PRD's (AC-ACC-02-13); the other three were added while
+/// implementing and wait for confirmation (issue table). The SDK already drops unknown kinds; nil is a second guard.
+public func securityNoticeText(_ kind: String) -> String? {
+    switch kind {
+    case "newDeviceLogin": return "你的账号在新设备登录"
+    case "recoveryCodeRegenerated": return "你的恢复码已重新生成"
+    case "refreshReplay": return "检测到你的账号登录凭证异常"
+    case "refreshRateLimited": return "你的账号登录凭证刷新过于频繁"
+    default: return nil
+    }
+}
+
 /// The lines of "最近登录记录" (F-ACC-02 rule 3b); an unknown kind still gets a line.
 public func accountEventText(_ kind: String) -> String {
     switch kind {

@@ -61,6 +61,9 @@ public final class AppModel {
     @ObservationIgnored private let monitor = NWPathMonitor()
     @ObservationIgnored private var accountSubscription: IMSubscription?
     @ObservationIgnored private var logoutTask: Task<Void, Never>?
+    /// Logged out but not destroyed yet. A new session destroys it first: it would connect with the new token, and its
+    /// `destroy` removes the database the new session uses.
+    @ObservationIgnored private var closingClient: IMClient?
     @ObservationIgnored private var restored = false
     @ObservationIgnored private var askNoticeOnEnter = false
     /// Each login gets its own navigation state and page state.
@@ -79,6 +82,7 @@ public final class AppModel {
         self.theme = theme
         self.prefs = prefs
         self.makeClient = makeClient ?? AppModel.liveClient
+        prefs.removeAll(prefix: "ui.noticeVersion.")  // Named with the plain user id and kept after logout (issue A2).
         account = makeAccount?(config, sessions) ?? AppModel.liveAccount(config, sessions)
         cachedConfig = prefs.get(Self.configKey).flatMap { try? JSONDecoder().decode(CachedConfig.self, from: Data($0.utf8)) }
         accountSubscription = account.on { [weak self] in self?.handle($0) }
@@ -135,9 +139,9 @@ public final class AppModel {
 
     /// Demo login: no refresh token, nothing for the SDK to refresh (F-ACC-07).
     public func login(_ demo: AccountSession) async {
-        await logoutFinished()
+        closeLoggedOutClient()
+        account.restore(demo)  // Before the save: a logout in flight now knows of the new session and leaves the store alone.
         try? await sessions.save(demo)
-        account.restore(demo)
         fatal = nil
         enterSession()
     }
@@ -175,7 +179,9 @@ public final class AppModel {
             guard case .code(let code) = error, ![4031, 4035, 4036, 4137].contains(code) else { return }
             self?.hub.show(errorText(code, cmd: "send"))
         }
-        store.onSecurityNotice = { [weak self] _ in self?.hub.show("你的账号在新设备登录") }  // AC-ACC-02-13.
+        store.onSecurityNotice = { [weak self] notice in  // AC-ACC-02-13, AC-ACC-03-25, AC-ACC-03-45.
+            if let text = securityNoticeText(notice.kind) { self?.hub.show(text) }
+        }
         self.store = store
         let notices = NoticeStore(client: client, userId: s.userId, prefs: prefs)
         notices.attach()  // Before connecting: with a subscriber the SDK catches up as soon as auth succeeds.
@@ -228,12 +234,14 @@ public final class AppModel {
     /// reminders (F-PUSH-12 rule 5). The push cursor is not in the local database and stays in every case (PRD-live 4.9).
     ///
     /// The page does not wait: `AccountClient.logout()` can hang on the network for 30 seconds (K2). It writes the pending
-    /// record and clears the stored token first, tells the server, and only then does the connection close with 1000.
+    /// record and clears the stored token first, tells the server, and only then does the connection close with 1000; a new
+    /// login before the answer closes it right then. The logout ends only its own session (issue A1).
     public func logout(keepNoticeSeen: Bool = false) {
         notices?.detach()
         notices = nil
         if !keepNoticeSeen, let userId = session?.userId { prefs.set(noticeSeenKey(userId), nil) }
         let client = store?.client
+        if let client { closingClient = client }
         store = nil
         session = nil
         fatal = nil
@@ -244,15 +252,20 @@ public final class AppModel {
         pendingDestination = nil
         hub.dismissDialog()
         let previous = logoutTask
-        logoutTask = Task { [account] in
-            await previous?.value
+        logoutTask = Task { [weak self, account] in
             await account.logout()
-            client?.destroy()
+            if let client, self?.closingClient === client { self?.closeLoggedOutClient() }
+            await previous?.value
         }
         TTLog.event("session.ended")
     }
 
-    /// Anything that starts a session waits for this: the logout ending would end the new session too.
+    private func closeLoggedOutClient() {
+        closingClient?.destroy()
+        closingClient = nil
+    }
+
+    /// Every logout so far got its answer or timed out. Nothing needs this to log in again.
     public func logoutFinished() async {
         await logoutTask?.value
     }
@@ -260,21 +273,21 @@ public final class AppModel {
     // MARK: Account pages
 
     public func accountLogin(username: String, password: String) async throws {
-        await logoutFinished()
+        closeLoggedOutClient()
         accept(try await account.login(username: username, password: password), askNotice: true)
     }
 
     public func accountRegister(username: String, password: String, nickname: String?, inviteCode: String?) async throws {
-        await logoutFinished()
+        closeLoggedOutClient()
         let result = try await account.register(
             username: username, password: password, nickname: nickname, inviteCode: inviteCode)
         // Registering agrees to the version on show (F-ACC-10 rule 2).
-        if case .loaded(let c) = loginConfig, let v = c.privacyNotice?.version { prefs.set(noticeVersionKey(result.userId), v) }
+        if case .loaded(let c) = loginConfig, let v = c.privacyNotice?.version { prefs.set(privacyAckKey(result.userId), v) }
         accept(result, askNotice: false)
     }
 
     public func accountRecover(username: String, recoveryCode: String, newPassword: String) async throws {
-        await logoutFinished()
+        closeLoggedOutClient()
         accept(try await account.recover(username: username, recoveryCode: recoveryCode, newPassword: newPassword), askNotice: true)
     }
 
@@ -338,15 +351,13 @@ public final class AppModel {
         return privacyURL(cachedConfig?.privacyURL)
     }
 
-    private func noticeVersionKey(_ userId: String) -> String { "ui.noticeVersion.\(userId)" }
-
     /// F-ACC-10 rule 2: once per new version, and not agreeing blocks nothing. The server has no way to record it or to say
     /// which version an account agreed to, so this device remembers (see "实现时发现的问题").
     private func askNoticeIfUpdated(_ userId: String) {
         let version: String?
         if case .loaded(let c) = loginConfig { version = c.privacyNotice?.version } else { version = cachedConfig?.privacyVersion }
-        guard let version, !version.isEmpty, prefs.get(noticeVersionKey(userId)) != version else { return }
-        let key = noticeVersionKey(userId)
+        guard let version, !version.isEmpty, prefs.get(privacyAckKey(userId)) != version else { return }
+        let key = privacyAckKey(userId)
         hub.present(id: "privacy-update-dialog") {
             PrivacyUpdateDialog {
                 self.prefs.set(key, version)

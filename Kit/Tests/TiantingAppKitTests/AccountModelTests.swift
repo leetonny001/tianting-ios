@@ -291,21 +291,60 @@ final class AccountModelTests: XCTestCase {
         XCTAssertEqual(store.pendingLogouts.count, 0)
     }
 
-    func testK2_loginWaitsForTheLogoutInFlight() async throws {
+    func testA1_loginWorksAtOnceWhileALogoutIsInFlight() async throws {
         try await confirmed()
         await connectFake()
+        let oldConnection = fake.transport.current
         m.logout()
         await flush()
+        let logoutCall = http.last("/v1/account/logout")
         async let again: Void = m.accountLogin(username: "alice", password: "pw123456")
         await flush()
-        XCTAssertEqual(http.to("/v1/account/login").count, 0, "the logout ending would end this session too")
-        http.last("/v1/account/logout").respond(200, [:])
-        await flush()
+        XCTAssertEqual(http.to("/v1/account/login").count, 1, "the login does not wait for the logout's answer")
+        XCTAssertEqual(oldConnection.closedWith?.code, 1000, "the old client is gone before the new session starts")
         await answer("/v1/account/login", authBody(sid: "s9", access: dayLater))
         try await again
         await flush()
         XCTAssertEqual(m.session?.userId, "alice")
-        XCTAssertNotNil(m.account.session)
+        let saved = store.saved?.accessToken
+        XCTAssertNotNil(saved)
+        XCTAssertEqual(m.account.session?.accessToken, saved)
+        let store1 = m.store
+        logoutCall.respond(200, [:])
+        await m.logoutFinished()
+        await flush()
+        XCTAssertEqual(m.session?.userId, "alice")
+        XCTAssertTrue(m.store === store1)
+        XCTAssertEqual(m.account.session?.accessToken, saved)
+        XCTAssertEqual(store.saved?.accessToken, saved)
+        XCTAssertNil(m.fatal)
+        XCTAssertEqual(store.pendingLogouts.count, 0)
+    }
+
+    func testA1_demoLoginWorksAtOnceWhileALogoutIsInFlight() async throws {
+        try await confirmed()
+        await connectFake()
+        m.logout()
+        await flush()
+        let logoutCall = http.last("/v1/account/logout")
+        await m.login(AccountSession(mode: .demo, userId: "alice", accessToken: "demo-token", accessExpiresAt: dayLater))
+        XCTAssertEqual(m.session?.mode, .demo)
+        logoutCall.respond(200, [:])
+        await m.logoutFinished()
+        await flush()
+        XCTAssertEqual(m.session?.mode, .demo)
+        XCTAssertEqual(m.account.session?.accessToken, "demo-token")
+        XCTAssertEqual(store.saved?.accessToken, "demo-token")
+    }
+
+    func testA2_privacyConfirmationIsPerAccountAndOldKeysGo() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "a2-\(UUID().uuidString)"))
+        let p = UIPrefs(defaults: defaults)
+        p.set("ui.noticeVersion.alice", "v1")
+        p.set("ui.theme", "dark")
+        p.removeAll(prefix: "ui.noticeVersion.")
+        XCTAssertNil(p.get("ui.noticeVersion.alice"))
+        XCTAssertEqual(p.get("ui.theme"), "dark")
     }
 
     // MARK: Configuration
@@ -389,7 +428,9 @@ final class AccountModelTests: XCTestCase {
         try await login
         await flush()
         XCTAssertEqual(m.hub.dialog?.id, "privacy-update-dialog")
-        XCTAssertEqual(prefs.get("ui.noticeVersion.alice"), "v1", "only a confirmation records it")
+        XCTAssertEqual(prefs.get(privacyAckKey("alice")), "v1", "only a confirmation records it")
+        XCTAssertFalse(privacyAckKey("alice").contains("alice"), "the key stays after logout")
+        XCTAssertNotEqual(privacyAckKey("alice"), privacyAckKey("bob"))
     }
 
     // MARK: Security notice and nickname
@@ -404,6 +445,30 @@ final class AccountModelTests: XCTestCase {
         ])
         await flush()
         XCTAssertEqual(m.hub.toast?.text, "你的账号在新设备登录")
+    }
+
+    // AC-ACC-03-25, AC-ACC-03-45, F-ACC-05 rule 5.
+    func testSecurityNoticeOtherKindsToastUnknownIsSilent() async throws {
+        try await confirmed()
+        await connectFake()
+        fake.transport.current.ack("convs", ["convs": [], "truncated": false])
+        await flush()
+        fake.transport.current.receive([
+            "cmd": "event", "data": ["type": "securityNotice", "kind": "futureKind", "at": 1, "platform": "android"],
+        ])
+        await flush()
+        XCTAssertNil(m.hub.toast)
+        for (kind, text) in [
+            ("recoveryCodeRegenerated", "你的恢复码已重新生成"), ("refreshReplay", "检测到你的账号登录凭证异常"),
+            ("refreshRateLimited", "你的账号登录凭证刷新过于频繁"),
+        ] {
+            fake.transport.current.receive([
+                "cmd": "event", "data": ["type": "securityNotice", "kind": .string(kind), "at": 1, "platform": "android"],
+            ])
+            await flush()
+            XCTAssertEqual(m.hub.toast?.text, text)
+        }
+        XCTAssertNil(securityNoticeText("futureKind"))
     }
 
     func testTC_ACC_06_05_nicknameShowsAtOnce() async throws {

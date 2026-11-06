@@ -664,6 +664,34 @@ final class AccountFakeServerTests: E2ECase {
         try await stateIs(0, 1)
     }
 
+    /// A1: logging in does not wait for a hanging logout, and that logout ending (here the SDK's 30 seconds) leaves the new
+    /// session alone; the old sid's record still goes out.
+    func testA1_loginAtOnceWhileALogoutHangs() async throws {
+        start()
+        try await logIn()
+        try await until("auth") { self.fake.authTokens.count == 1 }
+        fake.script("/v1/account/logout", .hang)
+        try await logOutAccount()
+        try await stateIs(0, 1)
+        fake.script("/v1/account/login", .json(200, fake.auth(sid: "s2")))  // A new sid, as the real server gives.
+        try await typeAccount()
+        let tapped = Date()
+        try await submit("account-submit")
+        try await see("tab-chats")
+        XCTAssertLessThan(Date().timeIntervalSince(tapped), 8, "far from the SDK's 30 seconds")
+        XCTAssertEqual(fake.requests("/v1/account/login").count, 2)
+        try await until("auth with the new token") { self.fake.authTokens.count == 2 }
+        // A login sends pending records: the old sid goes out again while the first request still hangs.
+        try await until("record sent") { self.fake.requests("/v1/account/logout").count >= 2 }
+        try await stateIs(1, 0)
+        // Past the SDK's 30 seconds for the first request: its end changes nothing.
+        try await sleep(32_000)
+        try await stateIs(1, 0)
+        XCTAssertTrue(el("tab-chats").exists)
+        XCTAssertFalse(el("account-username").exists)
+        XCTAssertFalse(el("kicked-text").exists)
+    }
+
     /// D1's password change committed, the response was lost, and the next refresh says so: the deadline, not the anomaly.
     func testTC_ACC_04_16_credentialsChangedIsNotAnAnomaly() async throws {
         start()
@@ -808,6 +836,19 @@ final class AccountFakeServerTests: E2ECase {
         fake.broadcast(["cmd": "event", "data": ["type": "securityNotice", "kind": "newDeviceLogin", "at": 1, "platform": "android"]])
         try await see("toast", timeout: 2)
         XCTAssertEqual(label("toast"), "你的账号在新设备登录")
+    }
+
+    /// AC-ACC-03-25, AC-ACC-03-45, F-ACC-05 rule 5. The wording of these three waits for confirmation (issue table).
+    func testSecurityNoticeOtherKindsToast() async throws {
+        start()
+        try await logIn()
+        try await until("auth") { self.fake.authTokens.count == 1 }
+        try await sleep(500)
+        fake.broadcast(["cmd": "event", "data": ["type": "securityNotice", "kind": "futureKind", "at": 1, "platform": "android"]])
+        try await staysGone(el("toast"))
+        fake.broadcast(["cmd": "event", "data": ["type": "securityNotice", "kind": "refreshReplay", "at": 1, "platform": "android"]])
+        try await see("toast", timeout: 2)
+        XCTAssertEqual(label("toast"), "检测到你的账号登录凭证异常")
     }
 
     func testTC_ACC_10_01_privacyEntriesOpenAndFailSoftly() async throws {
