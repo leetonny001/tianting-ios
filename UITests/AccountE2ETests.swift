@@ -8,12 +8,17 @@ final class AccountE2ETests: E2ECase {
     private var devices: [AccountClient] = []
     private var proxy: TCPProxy?
     private var clockMoved = false
+    private var darkMode = false
 
     override func tearDown() async throws {
         for d in devices { _ = d }
         devices = []
         proxy?.stop()
         proxy = nil
+        if darkMode {
+            try? await setSystemAppearance("light")
+            darkMode = false
+        }
         if clockMoved {
             try? await admin("POST", "/admin/test/clock", ["nowMs": NSNull()])
             clockMoved = false
@@ -619,6 +624,17 @@ final class AccountE2ETests: E2ECase {
 
     // F-ACC-02 rule 3b, F-ACC-05 rule 5, A12, A13: real server, with screenshots; the toast and the dialog together.
     func testFE620_noticesAndKickTogether() async throws {
+        try await noticesAndKickTogether(suffix: "")
+    }
+
+    // Issue I10 in dark mode: the toast stays above the dialog and "确定" works.
+    func testFE620_noticesAndKickTogetherDark() async throws {
+        try await setSystemAppearance("dark")
+        darkMode = true
+        try await noticesAndKickTogether(suffix: "-dark")
+    }
+
+    private func noticesAndKickTogether(suffix: String) async throws {
         let me = uid("note")
         start()
         try await registerInApp(me)
@@ -627,21 +643,29 @@ final class AccountE2ETests: E2ECase {
         _ = try await x.login(username: me, password: password)
         try await see("toast", timeout: 2)
         XCTAssertEqual(label("toast"), "你的账号在新设备登录")
-        capture("notice-newDeviceLogin")
+        capture("notice-newDeviceLogin" + suffix)
         try await gone(el("toast"), timeout: 8)
         _ = try await x.regenerateRecoveryCode(password: password)
         try await see("toast", timeout: 3)
         XCTAssertEqual(label("toast"), "你的恢复码已重新生成")
         XCTAssertFalse(el("kicked-text").exists)
-        capture("notice-recoveryCodeRegenerated")
+        capture("notice-recoveryCodeRegenerated" + suffix)
         try await gone(el("toast"), timeout: 8)
         _ = try await x.changePassword(oldPassword: password, newPassword: "new-password-8")
         try await see("kicked-text", timeout: 5)
-        capture("notice-passwordChanged-with-dialog")
+        // Issue I10: the notice that came just before the kick is drawn above the dialog, clear of the card.
+        XCTAssertTrue(el("toast").exists, "the notice is still on screen with the dialog")
+        XCTAssertEqual(all("toast").count, 1, "one toast")
+        XCTAssertEqual(label("toast"), "你的账号密码已被修改")
+        let toast = el("toast").frame
+        let card = el("kicked-dialog").frame
+        XCTAssertFalse(toast.intersects(card), "the toast \(toast) does not overlap the card \(card)")
+        XCTAssertGreaterThanOrEqual(toast.minY, app.windows.firstMatch.frame.minY, "the toast is on screen")
+        capture("notice-passwordChanged-with-dialog" + suffix)
         XCTAssertTrue(el("kicked-ok").isHittable, "the toast must not cover the button")
         try await tap("kicked-ok")
         try await see("login-use-account")
-        capture("notice-after-dialog")
+        capture("notice-after-dialog" + suffix)
     }
 
     // TC-ACC-03-13 on the real server: the refresh is saved, the app dies before using it, the restart uses it.
@@ -757,7 +781,7 @@ final class AccountE2ETests: E2ECase {
         try await stateIs(0, 0)
     }
 
-    // AC-ACC-03-43: `IM_REFRESH_ABSOLUTE=40s scripts/run-e2e.sh --only AccountE2ETests/testTC_ACC_03_45_realAbsoluteLimit`; skipped on the default server.
+    // AC-ACC-03-43 (issue F2 fixed in the server): `IM_REFRESH_ABSOLUTE=40s scripts/run-e2e.sh --only AccountE2ETests/testTC_ACC_03_45_realAbsoluteLimit`; skipped on the default server.
     func testTC_ACC_03_45_realAbsoluteLimit() async throws {
         let probe = device()
         let code = try await invite()
@@ -766,9 +790,12 @@ final class AccountE2ETests: E2ECase {
         let abs = try XCTUnwrap(probe.session?.absoluteExpiresAt)
         try XCTSkipIf(abs - nowMs() > 120_000, "needs IM_REFRESH_ABSOLUTE=40s")
         let me = uid("abs")
-        start()
+        let p = try proxied()
+        start(server: p.url)
         try await registerInApp(me)
+        try await until("connected", timeout: 10) { p.upgrades >= 1 }
         let first = saves()
+        let sockets = p.upgrades
         XCUIDevice.shared.press(.home)
         try await sleep(1000)
         app.activate()
@@ -776,9 +803,22 @@ final class AccountE2ETests: E2ECase {
         XCTAssertEqual(saves(), first, "no refresh at the limit")
         XCTAssertFalse(el("kicked-text").exists)
         try await sleep(5000)
-        XCTAssertEqual(saves(), first, "no refresh before the limit (issue F2 for the last second)")
+        XCTAssertEqual(saves(), first, "no refresh before the limit")
         try await see("kicked-text", timeout: 60)
         XCTAssertEqual(label("kicked-text"), "登录已失效，请重新登录")
+        // Past the limit too (F2 fixed on the server): nothing was refreshed and the app did not reconnect.
+        try await sleep(3000)
+        XCTAssertEqual(saves(), first, "no refresh after the limit either, events \(p.events)")
+        XCTAssertEqual(p.upgrades, sockets, "no reconnect, events \(p.events)")
+        // The server's `kicked/tokenExpired` at the limit (the JWT's `exp` is whole seconds, so up to 1 s early) makes the
+        // app ask once; since F2 the server answers 401 / 4019 expired. At most that one ask, and nothing succeeded.
+        let asks = p.events.filter { $0 == "req:POST /v1/account/token/refresh" }.count
+        XCTAssertLessThanOrEqual(asks, 1, "events \(p.events)")
+        if asks == 1 {
+            let tail = Array(p.events.drop { $0 != "req:POST /v1/account/token/refresh" })
+            XCTAssertEqual(Array(tail.dropFirst().prefix(2)), ["status:401", "http:4019"], "refused as expired: \(p.events)")
+        }
+        print("TC-ACC-03-45 events: \(p.events)")
         try await tap("kicked-ok")
         try await see("login-use-account")
         try await stateIs(0, 0)
@@ -847,5 +887,86 @@ final class AccountE2ETests: E2ECase {
         XCTAssertFalse(label("kicked-text").contains("凭证异常"), label("kicked-text"))
         try await tap("kicked-ok")
         try await see("login-use-account")
+    }
+
+    // AC-ACC-03-12, second half (`IM_ACCESS_TTL=30s scripts/run-e2e.sh --only AccountE2ETests/testTC_ACC_03_12_expiredWhileOnlineRefreshesQuietly`,
+    // skipped on the default server): connected, the access token runs out on the server's real timer, the server sends
+    // `kicked/tokenExpired`, the refresh succeeds, no dialog, the app reconnects. Moving the IM clock does not do it: the
+    // server's expiry timer is armed at `auth` with the remaining time and runs on the real clock.
+    func testTC_ACC_03_12_expiredWhileOnlineRefreshesQuietly() async throws {
+        let probe = device()
+        let code = try await invite()
+        _ = try await probe.register(username: uid("exp12p"), password: password, inviteCode: code)
+        let access = try XCTUnwrap(probe.session?.accessExpiresAt)
+        try XCTSkipIf(access - nowMs() > 120_000, "needs IM_ACCESS_TTL=30s")
+        let me = uid("exp12")
+        let p = try proxied()
+        start(server: p.url)
+        try await registerInApp(me)
+        // Under 6 hours left, so the app refreshes once on its own; that token is short on arrival, so from then on only
+        // the server's kick makes it refresh (the SDK's shortOnArrival). The save count is read before the kick is looked
+        // for: the proxy notes the kick before passing it on, so a count read while no kick is noted is from before it.
+        var beforeKick = saves()
+        try await until("the server kicks tokenExpired, events \(p.events)", timeout: 75) {
+            let n = self.saves()
+            if p.events.contains("kicked:tokenExpired") { return true }
+            beforeKick = n
+            return false
+        }
+        try await until("a real refresh after the kick, was \(state()), events \(p.events)", timeout: 20) {
+            self.saves() > beforeKick
+        }
+        // The order the proxy saw after the kick: the refresh, its 200, then a new WebSocket the server accepted (101).
+        try await until("reconnected after the kick, events \(p.events)", timeout: 10) {
+            p.events.drop { $0 != "kicked:tokenExpired" }.contains("status:101")
+        }
+        let afterKick = Array(p.events.drop { $0 != "kicked:tokenExpired" })
+        let refresh = try XCTUnwrap(afterKick.firstIndex(of: "req:POST /v1/account/token/refresh"), "refresh after the kick: \(afterKick)")
+        let reconnect = try XCTUnwrap(afterKick.firstIndex(of: "req:GET /ws"), "reconnect after the kick: \(afterKick)")
+        XCTAssertLessThan(refresh, reconnect, "refresh first, then reconnect: \(afterKick)")
+        XCTAssertEqual(afterKick[refresh + 1], "status:200", "the refresh succeeded: \(afterKick)")
+        XCTAssertEqual(afterKick.dropFirst(reconnect + 1).first, "status:101", "the server took the new connection: \(afterKick)")
+        try await sleep(2000)
+        XCTAssertFalse(el("kicked-text").exists, "no dialog")
+        XCTAssertFalse(el("kicked-dialog").exists, "no dialog")
+        try await see("tab-chats")
+        try await stateIs(1, 0)
+        XCTAssertFalse(p.events.contains { $0.hasPrefix("http:") }, "no request failed: \(p.events)")
+        XCTAssertFalse(p.events.contains { $0.hasPrefix("kicked:") && $0 != "kicked:tokenExpired" }, "\(p.events)")
+        print("TC-ACC-03-12 events: \(p.events)")
+    }
+
+    // AC-ACC-03-8 (PRD-chat v1.2, issue I3): the refresh token is revoked; a cold start goes back to login. Which text
+    // depends on the path the app actually took, and the test says which one it was: access expired here, so the refresh
+    // came first and got 4019 -> "登录已失效，请重新登录"; or access still good here, so `auth` came first and the server's
+    // `kicked` -> "账号已被下线". Only the server's clock moves, so this device takes the second path; the first is checked
+    // on the fake server.
+    func testTC_ACC_03_08_realRevokedRefreshColdStart() async throws {
+        let me = uid("rev")
+        let p = try proxied()
+        start(server: p.url)
+        try await registerInApp(me)
+        app.terminate()
+        try await admin("POST", "/admin/users/\(me)/force-logout", [:])
+        try await setClock(nowMs() + 25 * 3_600_000)
+        let before = p.events.count
+        start(reset: false, server: p.url)
+        try await see("kicked-text", timeout: 15)
+        let seen = Array(p.events.dropFirst(before))
+        // `kicked/tokenExpired` only starts a refresh, so it does not decide the path; the refresh's 4019 or a kick for the
+        // revocation does.
+        let first = try XCTUnwrap(
+            seen.first { $0 == "http:4019" || ($0.hasPrefix("kicked:") && $0 != "kicked:tokenExpired") },
+            "no 4019 and no revocation kick: \(seen)")
+        if first == "http:4019" {
+            XCTAssertEqual(label("kicked-text"), "登录已失效，请重新登录", "refresh path, \(seen)")
+        } else {
+            XCTAssertEqual(label("kicked-text"), "账号已被下线", "kick path (\(first)), \(seen)")
+        }
+        // Record which path this run took (the report quotes it).
+        print("TC-ACC-03-08 path: \(first), events \(seen)")
+        try await tap("kicked-ok")
+        try await see("login-use-account")
+        try await stateIs(0, 0)
     }
 }

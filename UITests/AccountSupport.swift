@@ -515,13 +515,53 @@ final class TCPProxy: @unchecked Sendable {
         }
     }
 
+    /// What came back, in order: `kicked:<reason>` from WebSocket frames, `status:<status>` and `http:<code>` (from error
+    /// bodies) of plain HTTP answers. For tests that must say which path ended a session (AC-ACC-03-8). No token values are kept.
+    var events: [String] { lock.withLock { _events } }
+    /// WebSocket connections the server accepted (101) through this proxy: a reconnect adds one.
+    var upgrades: Int { lock.withLock { _upgrades } }
+    private var _upgrades = 0
+    private var _events: [String] = []
+
+    /// `req:<method> <path>` for plain HTTP requests, without the query string.
+    private func noteRequest(_ data: Data) {
+        guard data.count > 4, let end = data.firstIndex(of: 0x0d) else { return }
+        let parts = String(decoding: data[data.startIndex..<end], as: UTF8.self).split(separator: " ")
+        guard parts.count >= 2, ["GET", "POST", "PUT", "DELETE", "PATCH"].contains(String(parts[0])) else { return }
+        let path = parts[1].split(separator: "?").first.map(String.init) ?? ""
+        lock.withLock { _events.append("req:\(parts[0]) \(path)") }
+    }
+
+    private func noteEvents(_ data: Data, socket: Bool) {
+        if !socket, data.starts(with: Data("HTTP/1.1 ".utf8)), data.count >= 12 {
+            let status = String(decoding: data[data.startIndex + 9..<data.startIndex + 12], as: UTF8.self)
+            lock.withLock { _events.append("status:" + status) }
+        }
+        // Lossy: WebSocket frame headers are not UTF-8, the JSON after them is.
+        let text = String(decoding: data, as: UTF8.self)
+        let pattern = socket ? #""type":"kicked","reason":"([A-Za-z]+)""# : #""code":([0-9]{4})"#
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return }
+        let found = re.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { m in
+            Range(m.range(at: 1), in: text).map { (socket ? "kicked:" : "http:") + text[$0] }
+        }
+        if !found.isEmpty { lock.withLock { _events += found } }
+    }
+
     private func pump(from: NWConnection, to: NWConnection, isResponse: Bool, upgraded: Bool = false) {
         from.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, done, error in
             guard let self else { return }
             var isSocket = upgraded
             if let data, !data.isEmpty, !(isResponse && self.holdResponses) {
-                if isResponse, !isSocket, data.starts(with: Data("HTTP/1.1 101".utf8)) { isSocket = true }
+                if isResponse, !isSocket, data.starts(with: Data("HTTP/1.1 101".utf8)) {
+                    isSocket = true
+                    self.lock.withLock {
+                        self._upgrades += 1
+                        self._events.append("status:101")
+                    }
+                }
                 if isResponse, !isSocket { self.note(data) }
+                if isResponse { self.noteEvents(data, socket: isSocket) }
+                if !isResponse, !isSocket { self.noteRequest(data) }
                 if isResponse, !isSocket, self.holdHTTPResponses {
                     self.held.append((to, data))
                 } else {

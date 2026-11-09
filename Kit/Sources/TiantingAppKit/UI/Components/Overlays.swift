@@ -104,14 +104,17 @@ struct ConfirmDialog: View {
     }
 }
 
-/// The toast layer (F-UI-19): above the input area, inside the keyboard-safe region.
+/// The toast layer (F-UI-19): above the input area, inside the keyboard-safe region. While the kicked dialog is up the
+/// dialog draws the toast itself, above the card (`inDialog`), so a `securityNotice` that arrives with the kick stays
+/// visible (issue I10); the root layer then shows nothing, so there is only one toast on screen.
 struct ToastLayer: View {
+    var inDialog = false
     @Environment(AppModel.self) private var model
 
     var body: some View {
         VStack {
-            Spacer()
-            if let toast = model.hub.toast {
+            if !inDialog { Spacer() }
+            if let toast = model.hub.toast, inDialog == (model.fatal != nil) {
                 Text(toast.text)
                     .font(TTFont.small)
                     .foregroundStyle(TC.onBrand)
@@ -120,10 +123,11 @@ struct ToastLayer: View {
                     .padding(.vertical, TS.s2)
                     .background(TC.textSecondary, in: RoundedRectangle(cornerRadius: TR.md))
                     .padding(.horizontal, TS.s5)
-                    .padding(.bottom, 72)
+                    .padding(inDialog ? .top : .bottom, inDialog ? TS.s5 : 72)
                     .id(toast.id)
                     .accessibilityIdentifier("toast")
             }
+            if inDialog { Spacer() }
         }
         .allowsHitTesting(false)
         .onChange(of: model.hub.toast?.id) { _, id in
@@ -164,6 +168,8 @@ struct KickedDialog: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("kicked-dialog")
         }
+        // Above the scrim and the card, at the top so it never covers "确定"; it lets touches through (issue I10).
+        .overlay { ToastLayer(inDialog: true) }
         .interactiveDismissDisabled()
         .presentationBackground(.clear)
     }
