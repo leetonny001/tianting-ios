@@ -184,7 +184,7 @@ struct TestStateProbe: View {
                     let store = KeychainSessionStore()
                     while !Task.isCancelled {
                         #if DEBUG
-                            value = "session=\(store.isEmpty ? 0 : 1) pending=\(store.pendingCount) class=\(store.accessibleClass)"
+                            value = "session=\(store.isEmpty ? 0 : 1) pending=\(store.pendingCount) class=\(store.accessibleClass) saves=\(TestHooks.saveCount)"
                         #endif
                         try? await Task.sleep(for: .milliseconds(100))
                     }

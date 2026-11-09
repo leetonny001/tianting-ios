@@ -159,6 +159,8 @@ final class AccountE2ETests: E2ECase {
         try await submit("register-submit")
         try await see("register-error", timeout: 15)
         XCTAssertEqual(label("register-error"), "邀请码无效")
+        let rows = try await signed("GET", "/admin/invites")["invites"] as? [[String: Any]] ?? []
+        XCTAssertEqual(rows.first { $0["codeLast4"] as? String == String(code.suffix(4)) }?["usedCount"] as? Int, 2)
     }
 
     // MARK: Devices
@@ -492,5 +494,358 @@ final class AccountE2ETests: E2ECase {
         try await tap("me-settings")
         try await see("about")
         XCTAssertFalse(el("settings-security").exists)
+    }
+
+    // MARK: FE-620: what only ran against the fake server, and notices with a kick. Simulator, local.
+
+    private func setClock(_ ms: Int64) async throws {
+        clockMoved = true
+        try await admin("POST", "/admin/test/clock", ["nowMs": ms])
+    }
+
+    private func nowMs() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
+
+    private func dateText(_ ms: Int64) -> String {
+        let c = Calendar.current.dateComponents([.year, .month, .day], from: Date(timeIntervalSince1970: TimeInterval(ms) / 1000))
+        return "请在 \(c.year!)/\(c.month!)/\(c.day!) 前用恢复码找回"
+    }
+
+    /// Whoever holds a stolen refresh token: refreshes it and promotes the result. Returns the status of the refresh.
+    private func steal(_ token: String, promote: Bool = true) async throws -> Int {
+        var req = URLRequest(url: URL(string: http + "/v1/account/token/refresh")!)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["refreshToken": token])
+        let (data, res) = try await URLSession.shared.data(for: req)
+        let status = (res as! HTTPURLResponse).statusCode
+        if promote, status == 200, let access = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["accessToken"] as? String {
+            var ev = URLRequest(url: URL(string: http + "/v1/account/events")!)
+            ev.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization")
+            let (_, r2) = try await URLSession.shared.data(for: ev)
+            XCTAssertEqual((r2 as! HTTPURLResponse).statusCode, 200)
+        }
+        return status
+    }
+
+    private func proxied() throws -> TCPProxy {
+        let p = TCPProxy(targetPort: try XCTUnwrap(URLComponents(string: http)?.port.map(UInt16.init)))
+        try p.start()
+        proxy = p
+        return p
+    }
+
+    private func saves() -> Int {
+        guard let r = state().range(of: "saves=") else { return -1 }
+        return Int(state()[r.upperBound...]) ?? -1
+    }
+
+    // TC-ACC-04-24, AC-ACC-04-25: sequences one to four, the date on screen on this device.
+    func testTC_ACC_04_24_sequenceA_logoutOthersThenPassword() async throws {
+        let me = uid("seqa")
+        let t0 = nowMs()
+        try await setClock(t0)
+        start()
+        try await registerInApp(me)
+        app.terminate()
+        let x = device()
+        _ = try await x.login(username: me, password: password)
+        _ = try await x.logoutOthers(password: password)
+        _ = try await x.changePassword(oldPassword: password, newPassword: "new-password-8")
+        try await setClock(t0 + 86_400_000)
+        start(reset: false)
+        try await see("kicked-text", timeout: 15)
+        XCTAssertTrue(label("kicked-text").contains(dateText(t0 + 7 * 86_400_000)), label("kicked-text"))
+        try await tap("kicked-ok")
+        try await see("login-use-account")
+    }
+
+    func testTC_ACC_04_24_sequenceB_passwordThenDelete() async throws {
+        let me = uid("seqb")
+        let t0 = nowMs()
+        try await setClock(t0)
+        start()
+        try await registerInApp(me)
+        app.terminate()
+        let x = device()
+        _ = try await x.login(username: me, password: password)
+        _ = try await x.changePassword(oldPassword: password, newPassword: "new-password-8")
+        try await x.requestDelete(password: "new-password-8")
+        try await setClock(t0 + 86_400_000)
+        start(reset: false)
+        try await see("kicked-text", timeout: 15)
+        XCTAssertTrue(label("kicked-text").contains(dateText(t0 + 7 * 86_400_000)), label("kicked-text"))
+        try await tap("kicked-ok")
+        try await see("login-use-account")
+    }
+
+    func testTC_ACC_04_24_sequenceC_secondPasswordChangeDoesNotMoveTheDate() async throws {
+        let me = uid("seqc")
+        let t0 = nowMs()
+        try await setClock(t0)
+        start()
+        try await registerInApp(me)
+        app.terminate()
+        let x = device()
+        _ = try await x.login(username: me, password: password)
+        _ = try await x.changePassword(oldPassword: password, newPassword: "new-password-8")
+        try await setClock(t0 + 5 * 86_400_000)
+        _ = try await x.changePassword(oldPassword: "new-password-8", newPassword: "new-password-9")
+        try await setClock(t0 + 6 * 86_400_000)
+        start(reset: false)
+        try await see("kicked-text", timeout: 15)
+        XCTAssertTrue(label("kicked-text").contains(dateText(t0 + 7 * 86_400_000)), label("kicked-text"))
+        try await tap("kicked-ok")
+        try await see("login-use-account")
+    }
+
+    func testTC_ACC_04_24_sequenceD_logoutOthersWhileOnline() async throws {
+        let me = uid("seqd")
+        let t0 = nowMs()
+        try await setClock(t0)
+        start()
+        try await registerInApp(me)
+        try await waitForConnection(me)
+        // C1 replaced on day 0 by this device; the other device then logs the others out while this one is online.
+        let x = device()
+        _ = try await x.login(username: me, password: password)
+        _ = try await x.regenerateRecoveryCode(password: password)
+        _ = try await x.logoutOthers(password: password)
+        try await see("kicked-text", timeout: 15)
+        XCTAssertTrue(label("kicked-text").contains(dateText(t0 + 7 * 86_400_000)), label("kicked-text"))
+        capture("sequenceD-kicked")
+        try await tap("kicked-ok")
+        try await see("login-use-account")
+    }
+
+    // F-ACC-02 rule 3b, F-ACC-05 rule 5, A12, A13: real server, with screenshots; the toast and the dialog together.
+    func testFE620_noticesAndKickTogether() async throws {
+        let me = uid("note")
+        start()
+        try await registerInApp(me)
+        try await waitForConnection(me)
+        let x = device()
+        _ = try await x.login(username: me, password: password)
+        try await see("toast", timeout: 2)
+        XCTAssertEqual(label("toast"), "你的账号在新设备登录")
+        capture("notice-newDeviceLogin")
+        try await gone(el("toast"), timeout: 8)
+        _ = try await x.regenerateRecoveryCode(password: password)
+        try await see("toast", timeout: 3)
+        XCTAssertEqual(label("toast"), "你的恢复码已重新生成")
+        XCTAssertFalse(el("kicked-text").exists)
+        capture("notice-recoveryCodeRegenerated")
+        try await gone(el("toast"), timeout: 8)
+        _ = try await x.changePassword(oldPassword: password, newPassword: "new-password-8")
+        try await see("kicked-text", timeout: 5)
+        capture("notice-passwordChanged-with-dialog")
+        XCTAssertTrue(el("kicked-ok").isHittable, "the toast must not cover the button")
+        try await tap("kicked-ok")
+        try await see("login-use-account")
+        capture("notice-after-dialog")
+    }
+
+    // TC-ACC-03-13 on the real server: the refresh is saved, the app dies before using it, the restart uses it.
+    func testTC_ACC_03_13_realKillAfterSaveThenNewToken() async throws {
+        let me = uid("kill")
+        start()
+        try await registerInApp(me)
+        app.terminate()
+        let t = nowMs() + 25 * 3_600_000
+        try await setClock(t)
+        launch(reset: false, env: ["TT_TEST_STATE": "1", "TIANTING_SERVER": http, "TT_TEST_EXIT_AFTER_SAVE": "1"])
+        try await until("the app exits after saving", timeout: 30) { self.app.state == .notRunning }
+        try await setClock(t + 5 * 60_000)  // Past the overlap window: only the saved value is good now.
+        start(reset: false)
+        try await see("tab-chats", timeout: 15)
+        try await sleep(2500)
+        XCTAssertFalse(el("kicked-text").exists, "the new token is valid, no replay")
+        try await stateIs(1, 0)
+    }
+
+    // TC-ACC-03-26: a real replay through the app.
+    func testTC_ACC_03_26_realReplayDialog() async throws {
+        let me = uid("rep")
+        let p = try proxied()
+        start(server: p.url)
+        try await registerInApp(me)
+        app.terminate()
+        let stolen = try XCTUnwrap(p.seenRefreshTokens.last)
+        let t0 = nowMs()
+        try await setClock(t0 + 25 * 3_600_000)
+        let status = try await steal(stolen)
+        XCTAssertEqual(status, 200)
+        try await setClock(t0 + 25 * 3_600_000 + 3 * 60_000)
+        start(reset: false, server: p.url)
+        try await see("kicked-text", timeout: 20)
+        XCTAssertTrue(label("kicked-text").contains("检测到登录凭证异常"), label("kicked-text"))
+        try await tap("kicked-ok")
+        try await see("login-use-account")
+        try await stateIs(0, 0)
+    }
+
+    // TC-ACC-03-41: one real superseded, then the window ends and the retry is a replay. Three in a row only exist on the fake server.
+    func testTC_ACC_03_41_realSupersededThenReplay() async throws {
+        let me = uid("sup")
+        let p = try proxied()
+        start(server: p.url)
+        try await registerInApp(me)
+        app.terminate()
+        let stolen = try XCTUnwrap(p.seenRefreshTokens.last)
+        let t = nowMs() + 25 * 3_600_000
+        try await setClock(t)
+        let status = try await steal(stolen)
+        XCTAssertEqual(status, 200)
+        try await setClock(t + 2 * 60_000 - 5000)  // Five seconds of the window left.
+        start(reset: false, server: p.url)
+        try await see("tab-chats", timeout: 10)
+        try await sleep(2000)
+        XCTAssertFalse(el("kicked-text").exists, "stays on this page, waits retryAfterSeconds")
+        try await setClock(t + 2 * 60_000 + 1000)
+        try await see("kicked-text", timeout: 20)
+        XCTAssertTrue(label("kicked-text").contains("检测到登录凭证异常"), label("kicked-text"))
+        try await tap("kicked-ok")
+    }
+
+    // AC-ACC-03-37, first half: the 21st issue in the hour gets 4290 from the real server; stays here.
+    func testTC_ACC_03_40_real4290StaysHere() async throws {
+        let me = uid("lim")
+        let p = try proxied()
+        start(server: p.url)
+        try await registerInApp(me)
+        app.terminate()
+        let held = try XCTUnwrap(p.seenRefreshTokens.last)
+        let t = nowMs() + 25 * 3_600_000
+        try await setClock(t)
+        var last = 0
+        for _ in 0..<21 { last = try await steal(held, promote: false) }
+        XCTAssertEqual(last, 429)
+        start(reset: false, server: p.url)
+        try await see("tab-chats", timeout: 10)
+        try await sleep(3000)
+        XCTAssertFalse(el("kicked-text").exists, "no dialog on 4290")
+        try await stateIs(1, 0)
+        // The next hour the retry goes through.
+        let before = saves()
+        try await setClock(t + 61 * 60_000)
+        try await until("the backoff retry succeeds, was \(state())", timeout: 45) { self.saves() > before }
+    }
+
+    // TC-ACC-04-25 scene two on the real server: the kick comes first, the answer after 31 seconds.
+    func testTC_ACC_04_25_realResponseAfter31Seconds() async throws {
+        let me = uid("late")
+        let p = try proxied()
+        start(server: p.url)
+        try await registerInApp(me)
+        try await waitForConnection(me)
+        try await toSecurity()
+        try await tap("security-password")
+        try await type(password, into: "security-current")
+        try await type("new-password-8", into: "security-new")
+        p.holdHTTPResponses = true
+        let before = saves()
+        let started = Date()
+        try await submit("security-submit")
+        try await see("kicked-text", timeout: 40)
+        XCTAssertGreaterThan(Date().timeIntervalSince(started), 25, "the kick waits for the timeout")
+        try await sleep(max(0, Int((31 - Date().timeIntervalSince(started)) * 1000)))
+        p.releaseHeld()
+        try await sleep(1500)
+        XCTAssertEqual(saves(), before, "the late answer is dropped")
+        XCTAssertTrue(el("kicked-text").exists)
+        try await tap("kicked-ok")
+        try await see("login-use-account")
+        try await stateIs(0, 0)
+    }
+
+    // AC-ACC-03-43: `IM_REFRESH_ABSOLUTE=40s scripts/run-e2e.sh --only AccountE2ETests/testTC_ACC_03_45_realAbsoluteLimit`; skipped on the default server.
+    func testTC_ACC_03_45_realAbsoluteLimit() async throws {
+        let probe = device()
+        let code = try await invite()
+        let probeUser = uid("absp")
+        _ = try await probe.register(username: probeUser, password: password, inviteCode: code)
+        let abs = try XCTUnwrap(probe.session?.absoluteExpiresAt)
+        try XCTSkipIf(abs - nowMs() > 120_000, "needs IM_REFRESH_ABSOLUTE=40s")
+        let me = uid("abs")
+        start()
+        try await registerInApp(me)
+        let first = saves()
+        XCUIDevice.shared.press(.home)
+        try await sleep(1000)
+        app.activate()
+        try await sleep(1000)
+        XCTAssertEqual(saves(), first, "no refresh at the limit")
+        XCTAssertFalse(el("kicked-text").exists)
+        try await sleep(5000)
+        XCTAssertEqual(saves(), first, "no refresh before the limit (issue F2 for the last second)")
+        try await see("kicked-text", timeout: 60)
+        XCTAssertEqual(label("kicked-text"), "登录已失效，请重新登录")
+        try await tap("kicked-ok")
+        try await see("login-use-account")
+        try await stateIs(0, 0)
+    }
+
+    // AC-ACC-03-10: `IM_ACCESS_TTL=6h20s scripts/run-e2e.sh --only AccountE2ETests/testTC_ACC_03_10_realTimerRefreshReconnectsQuietly`; skipped on the default server. A real timer, not [SDK clock].
+    func testTC_ACC_03_10_realTimerRefreshReconnectsQuietly() async throws {
+        let probe = device()
+        let code = try await invite()
+        let probeUser = uid("ttlp")
+        _ = try await probe.register(username: probeUser, password: password, inviteCode: code)
+        let access = try XCTUnwrap(probe.session?.accessExpiresAt)
+        try XCTSkipIf(access - nowMs() > 7 * 3_600_000, "needs IM_ACCESS_TTL=6h20s")
+        let me = uid("ttl")
+        let friend = try await peer(uid("ttlpeer"))
+        start()
+        try await registerInApp(me)
+        let first = saves()
+        try await until("the timer's refresh, was \(state())", timeout: 40) { self.saves() > first }
+        XCTAssertFalse(el("kicked-text").exists)
+        XCTAssertFalse(el("conn-banner").exists, "no connection notice")
+        try await sleep(2000)
+        XCTAssertFalse(el("conn-banner").exists, "no connection notice")
+        try await startChat(with: friend.userId ?? "")
+        try await send("after refresh")
+        try await sent("after refresh")
+    }
+
+    // TC-ACC-04-15, AC-ACC-04-16: the password change committed, the answer lost. The server kicks first; no "凭证异常".
+    func testTC_ACC_04_15_realPasswordResponseLost() async throws {
+        let me = uid("lost")
+        let p = try proxied()
+        start(server: p.url)
+        try await registerInApp(me)
+        try await waitForConnection(me)
+        try await toSecurity()
+        try await tap("security-password")
+        try await type(password, into: "security-current")
+        try await type("new-password-8", into: "security-new")
+        p.holdHTTPResponses = true
+        try await submit("security-submit")
+        try await see("kicked-text", timeout: 40)
+        XCTAssertTrue(label("kicked-text").contains("你的账号凭证有变化"), label("kicked-text"))
+        XCTAssertFalse(label("kicked-text").contains("凭证异常"), label("kicked-text"))
+        p.holdHTTPResponses = false
+        try await tap("kicked-ok")
+        try await see("login-use-account")
+        try await logInInApp(me, "new-password-8")
+        try await see("recovery-code", timeout: 15)
+    }
+
+    // TC-ACC-03-34, the other half: access expired, the refresh gets 4019 credentialsChanged and the date.
+    func testTC_ACC_03_34_expiredAccessGets4019WithTheDate() async throws {
+        let me = uid("exp34")
+        start()
+        try await registerInApp(me)
+        app.terminate()
+        let d2 = device()
+        _ = try await d2.login(username: me, password: password)
+        let changed = nowMs()
+        _ = try await d2.changePassword(oldPassword: password, newPassword: "new-password-8")
+        try await setClock(changed + 25 * 3_600_000)
+        start(reset: false)
+        try await see("kicked-text", timeout: 15)
+        XCTAssertTrue(label("kicked-text").contains(dateText(changed + 7 * 86_400_000)), label("kicked-text"))
+        XCTAssertFalse(label("kicked-text").contains("凭证异常"), label("kicked-text"))
+        try await tap("kicked-ok")
+        try await see("login-use-account")
     }
 }

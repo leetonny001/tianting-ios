@@ -423,6 +423,9 @@ final class TCPProxy: @unchecked Sendable {
     private let lock = NSLock()
     private var _down = false
     private var _holdResponses = false
+    private var _holdHTTP = false
+    private var _seenRefresh: [String] = []
+    private var held: [(NWConnection, Data)] = []
     private(set) var port: UInt16 = 0
     var url: String { "http://localhost:\(port)" }
 
@@ -484,18 +487,53 @@ final class TCPProxy: @unchecked Sendable {
         pump(from: up, to: c, isResponse: true)
     }
 
-    private func pump(from: NWConnection, to: NWConnection, isResponse: Bool) {
+    /// Plain-HTTP responses wait until `releaseHeld()`; a connection that switched to WebSocket keeps flowing, the way a
+    /// late HTTP answer reaches the app after the server's kick.
+    var holdHTTPResponses: Bool {
+        get { lock.withLock { _holdHTTP } }
+        set { lock.withLock { _holdHTTP = newValue } }
+    }
+
+    func releaseHeld() {
+        holdHTTPResponses = false
+        queue.async {
+            for (to, data) in self.held { to.send(content: data, completion: .contentProcessed { _ in }) }
+            self.held = []
+        }
+    }
+
+    /// The `refreshToken` values seen in responses, oldest first: the "stolen" token of the attack tests. Test memory only.
+    var seenRefreshTokens: [String] { lock.withLock { _seenRefresh } }
+
+    private func note(_ data: Data) {
+        guard let text = String(data: data, encoding: .utf8), text.contains("\"refreshToken\":\"") else { return }
+        for part in text.components(separatedBy: "\"refreshToken\":\"").dropFirst() {
+            if let end = part.firstIndex(of: "\"") {
+                let token = String(part[..<end])
+                lock.withLock { _seenRefresh.append(token) }
+            }
+        }
+    }
+
+    private func pump(from: NWConnection, to: NWConnection, isResponse: Bool, upgraded: Bool = false) {
         from.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, done, error in
             guard let self else { return }
+            var isSocket = upgraded
             if let data, !data.isEmpty, !(isResponse && self.holdResponses) {
-                to.send(content: data, completion: .contentProcessed { _ in })
+                if isResponse, !isSocket, data.starts(with: Data("HTTP/1.1 101".utf8)) { isSocket = true }
+                if isResponse, !isSocket { self.note(data) }
+                if isResponse, !isSocket, self.holdHTTPResponses {
+                    self.held.append((to, data))
+                } else {
+                    to.send(content: data, completion: .contentProcessed { _ in })
+                }
             }
             if done || error != nil {
                 from.cancel()
                 to.cancel()
                 return
             }
-            self.pump(from: from, to: to, isResponse: isResponse)
+            self.pump(from: from, to: to, isResponse: isResponse, upgraded: isSocket)
         }
     }
 }

@@ -1,6 +1,6 @@
 # tianting-ios
 
-天听 iOS 客户端（Swift + SwiftUI，iOS 17+）。**天听**是自研的微信式 IM 产品。信息架构见 tianting-server 的 `docs/prd/PRD-ui-v1.0.md`，视觉是天听自有品牌（靛蓝 `#4C5FD5`）。
+天听 iOS 客户端（Swift + SwiftUI，iOS 17+）。**天听**是自研的独立 IM 产品。信息架构见 tianting-server 的 `docs/prd/PRD-ui-v1.0.md`，视觉是天听自有品牌（靛蓝 `#4C5FD5`）。
 
 ## 结构
 

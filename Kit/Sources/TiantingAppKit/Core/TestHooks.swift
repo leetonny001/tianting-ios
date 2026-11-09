@@ -5,6 +5,8 @@ enum TestHooks {
     #if DEBUG
         private static let env = ProcessInfo.processInfo.environment
         private nonisolated(unsafe) static var saves = 0
+        /// Session saves since launch: lets a test see a refresh happen against the real server, no values.
+        static var saveCount: Int { saves }
 
         /// `TT_TEST_EXIT_AFTER_SAVE=n`: dies right after the n-th session save, before the token is used (TC-ACC-03-13).
         static func savedSession() {
