@@ -40,6 +40,8 @@ public final class IMStore {
     public var onFatal: ((FatalReason) -> Void)?
     public var onSecurityNotice: ((SecurityNotice) -> Void)?
     public var onSendFailed: ((String, String, SendFailure) -> Void)?
+    /// Files expired or deleted: decoded images and running downloads go (F-FILE-06 rule 3).
+    public var onFilesExpired: (([String]) -> Void)?
     @ObservationIgnored private var subscription: IMSubscription?
     @ObservationIgnored private var activeConv: String?
 
@@ -107,8 +109,8 @@ public final class IMStore {
             break  // AppModel hears it from AccountClient, which also has it from HTTP.
         case .profileChanged:
             profileVersion += 1
-        case .filesExpired:
-            break  // 图片缓存的清理随 FE-638
+        case .filesExpired(let ids):
+            onFilesExpired?(ids)
         }
     }
 

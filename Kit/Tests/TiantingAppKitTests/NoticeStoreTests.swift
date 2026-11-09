@@ -290,7 +290,7 @@ final class NoticeStoreTests: XCTestCase {
             sessions: MemorySessionStore(),
             theme: ThemeController(prefs: prefs),
             prefs: prefs,
-            makeClient: { _ in fake.client },
+            makeClient: { _, _ in fake.client },
             makeAccount: { _, s in fakeAccount(store: s, clock: fake.clock) })
         return (m, fake)
     }

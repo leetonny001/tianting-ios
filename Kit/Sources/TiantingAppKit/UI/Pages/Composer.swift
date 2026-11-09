@@ -97,12 +97,15 @@ struct ComposerTextView: UIViewRepresentable {
 }
 
 /// The input area (PRD-ui F-UI-10, F-UI-11): emoji button, input growing to 5 lines, send button. Over 5000 code points it
-/// shows "已超出 N 字" and cannot send (C-28).
+/// shows "已超出 N 字" and cannot send (C-28). With `features.files` a "+" opens images and files (13.3).
 struct Composer: View {
     @Binding var text: String
     @Binding var emojiOpen: Bool
+    @Binding var plusOpen: Bool
     let handle: ComposerHandle
+    var showPlus = false
     let onSend: () -> Void
+    var onPick: (PickKind) -> Void = { _ in }
 
     private var over: Int { overLimitCount(text) }
     private var disabled: Bool { trimText(text).isEmpty || over > 0 }
@@ -113,6 +116,7 @@ struct Composer: View {
             HStack(alignment: .bottom, spacing: TS.s2) {
                 Button {
                     emojiOpen.toggle()
+                    plusOpen = false
                     if emojiOpen { handle.blur() } else { handle.focus() }
                 } label: {
                     Icon(name: .smile)
@@ -124,10 +128,26 @@ struct Composer: View {
                 ComposerTextView(
                     text: $text, handle: handle,
                     onReturn: { if !disabled { onSend() } },
-                    onBeginEditing: { emojiOpen = false }
+                    onBeginEditing: {
+                        emojiOpen = false
+                        plusOpen = false
+                    }
                 )
                 .background(TC.bg, in: RoundedRectangle(cornerRadius: TR.md))
                 .overlay(RoundedRectangle(cornerRadius: TR.md).stroke(TC.borderInput, lineWidth: 1))
+                if showPlus {
+                    Button {
+                        plusOpen.toggle()
+                        emojiOpen = false
+                        if plusOpen { handle.blur() }
+                    } label: {
+                        Icon(name: .plus)
+                            .foregroundStyle(TC.textSecondary)
+                            .frame(width: Tokens.Size.touchMin, height: Tokens.Size.touchMin)
+                    }
+                    .accessibilityLabel("发送图片或文件")
+                    .accessibilityIdentifier("attach-button")
+                }
                 Button("发送", action: onSend)
                     .buttonStyle(TTButtonStyle(small: true))
                     .disabled(disabled)
@@ -142,6 +162,7 @@ struct Composer: View {
                     .padding(.bottom, TS.s2)
             }
             if emojiOpen { EmojiPanel { handle.insert($0, text: &text) } }
+            if plusOpen, showPlus { AttachPanel(onPick: onPick) }
         }
         .background(TC.surface.ignoresSafeArea(edges: .bottom))
     }

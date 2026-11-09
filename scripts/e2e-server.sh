@@ -2,7 +2,7 @@
 # Builds and starts a real im-server in test mode for the iOS end-to-end tests. All secrets are random and live only in a
 # temporary directory for this run; they are test-only, on this machine.
 #   source scripts/e2e-server.sh      defines tt_server_start and tt_server_stop
-# After tt_server_start: TT_E2E_HTTP, TT_E2E_ADMIN, TT_E2E_ADMIN_KEY, TT_E2E_CALLER, TT_E2E_SECRET, TT_E2E_DIR.
+# After tt_server_start: TT_E2E_HTTP, TT_E2E_ADMIN, TT_E2E_S3, TT_E2E_ADMIN_KEY, TT_E2E_CALLER, TT_E2E_SECRET, TT_E2E_DIR.
 TT_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 tt_server_dir() {
@@ -21,10 +21,22 @@ tt_server_start() {
   (cd "$dir" && go build -o "$TT_E2E_DIR/im-server" ./cmd/im-server) || return 1
   port="${TT_E2E_PORT:-18180}"
   admin_port="${TT_E2E_ADMIN_PORT:-18181}"
-  if lsof -iTCP:"$port" -sTCP:LISTEN > /dev/null 2>&1; then
-    echo "port $port is in use (a server left from an earlier run?)" >&2
-    return 1
-  fi
+  local s3_port="${TT_E2E_S3_PORT:-18183}"
+  for p in "$port" "$s3_port"; do
+    if lsof -iTCP:"$p" -sTCP:LISTEN > /dev/null 2>&1; then
+      echo "port $p is in use (a server left from an earlier run?)" >&2
+      return 1
+    fi
+  done
+  # Images and files (C2): the fake S3 (scripts/fake_s3.py, 127.0.0.1 only; the simulator shares the Mac's network, so the
+  # presigned http://127.0.0.1 addresses work as they are, NSAllowsLocalNetworking). Its credentials are fake values it does
+  # not check, not real keys.
+  python3 -I "$TT_REPO/scripts/fake_s3.py" --port "$s3_port" > "$TT_E2E_DIR/s3.log" 2>&1 &
+  TT_E2E_S3_PID=$!
+  for _ in $(seq 1 50); do
+    curl -fs "http://127.0.0.1:$s3_port/__health" > /dev/null 2>&1 && break
+    sleep 0.1
+  done
   TT_E2E_ADMIN_KEY="$(openssl rand -hex 24)"
   TT_E2E_CALLER="ios-e2e"
   TT_E2E_SECRET="$(openssl rand -hex 24)"
@@ -40,20 +52,27 @@ JSON
     IM_REGISTER_MODE=invite IM_REFRESH_KEYS="e2e:$(openssl rand -hex 24)" IM_TEST_DISABLE_AUTH_LOCK=1 \
     IM_ADMIN_KEY="$TT_E2E_ADMIN_KEY" IM_JWT_SECRET="$(openssl rand -hex 24)" \
     IM_QUARANTINE_KEY="$(openssl rand -hex 24)" IM_ADMIN_CALLERS="$callers" \
+    IM_FILES_ENABLED=1 IM_OBJSTORE_ENDPOINT="http://127.0.0.1:$s3_port" IM_OBJSTORE_REGION=us-east-1 \
+    IM_OBJSTORE_BUCKET=chat IM_OBJSTORE_PUBLIC_BUCKET=avatars IM_OBJSTORE_PUBLIC_BASE_URL="http://127.0.0.1:$s3_port/avatars" \
+    IM_OBJSTORE_ACCESS_KEY=ios-e2e-access IM_OBJSTORE_SECRET_KEY=ios-e2e-not-a-secret IM_UPLOAD_RATE="${IM_UPLOAD_RATE:-1000}" \
     "$TT_E2E_DIR/im-server" > "$TT_E2E_DIR/server.log" 2>&1 &
   TT_E2E_PID=$!
   TT_E2E_HTTP="http://localhost:$port"
   TT_E2E_ADMIN="http://127.0.0.1:$admin_port"
+  TT_E2E_S3="http://127.0.0.1:$s3_port"
   for _ in $(seq 1 100); do
     curl -fs "http://127.0.0.1:$port/readyz" > /dev/null && break
     sleep 0.1
   done
   curl -fs "http://127.0.0.1:$port/readyz" > /dev/null || { cat "$TT_E2E_DIR/server.log"; return 1; }
-  export TT_E2E_DIR TT_E2E_PID TT_E2E_HTTP TT_E2E_ADMIN TT_E2E_ADMIN_KEY TT_E2E_CALLER TT_E2E_SECRET
+  export TT_E2E_DIR TT_E2E_PID TT_E2E_S3_PID TT_E2E_HTTP TT_E2E_ADMIN TT_E2E_S3 TT_E2E_ADMIN_KEY TT_E2E_CALLER TT_E2E_SECRET
 }
 
 tt_server_stop() {
   [ -n "${TT_E2E_PID:-}" ] && kill "$TT_E2E_PID" 2> /dev/null
+  [ -n "${TT_E2E_S3_PID:-}" ] && kill "$TT_E2E_S3_PID" 2> /dev/null
+  [ -n "${TT_E2E_PID:-}" ] && wait "$TT_E2E_PID" 2> /dev/null
+  [ -n "${TT_E2E_S3_PID:-}" ] && wait "$TT_E2E_S3_PID" 2> /dev/null
   [ -n "${TT_E2E_DIR:-}" ] && rm -rf "$TT_E2E_DIR"
-  unset TT_E2E_PID TT_E2E_DIR
+  unset TT_E2E_PID TT_E2E_S3_PID TT_E2E_DIR
 }

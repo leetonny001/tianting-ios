@@ -29,6 +29,10 @@ public struct TiantingRootView: View {
                     try? FileManager.default.removeItem(at: dir.appendingPathComponent("tianting"))
                 }
             }
+            // TC-FILE-07-10: the sandbox copies are gone (no way for a test to reach the app's container otherwise).
+            if ProcessInfo.processInfo.environment["TT_TEST_DROP_SANDBOX"] == "1", let root = AppModel.attachmentRoot {
+                try? FileManager.default.removeItem(at: root)
+            }
             if let legacy = TestHooks.legacySession { sessions.seedLegacySession(userId: legacy.userId, token: legacy.token) }
         #endif
     }

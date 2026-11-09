@@ -30,6 +30,9 @@ ICONS = {
     "newFriends": "user-round-plus",
     "groups": "messages-square",
     "settings": "settings",
+    "image": "image",
+    "file": "file",
+    "close": "x",
 }
 
 

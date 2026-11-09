@@ -44,6 +44,8 @@ private struct ChatContent: View {
     @State private var atBottom = true
     @State private var anchorId: String?
     @State private var listWidth: CGFloat = 320
+    @State private var plusOpen = false
+    @State private var picking: PickKind?
 
     private var isGroup: Bool { type == .group }
     private var conv: Conversation? { store.conversation(convId) }
@@ -109,6 +111,74 @@ private struct ChatContent: View {
         }
         .task(id: to) {
             await store.loadProfiles([isGroup ? store.me : to])
+        }
+        .sheet(isPresented: Binding(get: { picking != nil }, set: { if !$0 { picking = nil } })) {
+            switch picking {
+            case .images: PhotoPicker { picked($0, kind: .images) }.ignoresSafeArea()
+            case .files: DocumentPicker { picked($0, kind: .files) }.ignoresSafeArea()
+            case nil: EmptyView()
+            }
+        }
+    }
+
+    // MARK: Images and files (FE-637)
+
+    private func pick(_ kind: PickKind) {
+        plusOpen = false
+        if let items = testPicked(kind) {
+            picked(items, kind: kind)
+        } else {
+            picking = kind
+        }
+    }
+
+    /// More than 9: none is sent (H16). "文件" with images asks first (F-FILE-03 rule 2, AC-FILE-03-6).
+    private func picked(_ results: [Result<Picked, PickFailed>], kind: PickKind) {
+        picking = nil
+        var items: [Picked] = []
+        var failed: PickFailed?
+        for r in results {
+            switch r {
+            case .success(let p): items.append(p)
+            case .failure(let e): failed = e
+            }
+        }
+        if let failed { model.hub.show(failed.storage ? storageFullText : "无法读取所选文件") }
+        guard !items.isEmpty else { return }
+        if items.count > maxPick {
+            for p in items { try? FileManager.default.removeItem(at: p.file) }
+            model.hub.show(pickTooManyText)
+            return
+        }
+        if kind == .files, items.contains(where: { looksLikeImage(mime: $0.mime, name: $0.name) }) {
+            model.hub.present(id: "keep-info-dialog") {
+                ConfirmDialog(text: keepMetadataTip, ok: "发送") { sendPicked(items, kind: kind) }
+            }
+            return
+        }
+        sendPicked(items, kind: kind)
+    }
+
+    private func sendPicked(_ items: [Picked], kind: PickKind) {
+        guard let media = model.media else { return }
+        for p in items {
+            do {
+                if kind == .images {
+                    try media.sendImage(convId, p)
+                } else {
+                    let size = (try? FileManager.default.attributesOfItem(atPath: p.file.path)[.size] as? NSNumber)?.int64Value ?? 0
+                    if size > fileMaxBytes {
+                        try? FileManager.default.removeItem(at: p.file)
+                        model.hub.show("文件过大，最大 100 MB")
+                        continue
+                    }
+                    try media.sendFile(convId, p)
+                }
+                atBottom = true
+            } catch {
+                try? FileManager.default.removeItem(at: p.file)
+                model.hub.show(error is IMConnectionError ? "正在连接，请稍后再发送" : errorText(5000))
+            }
         }
     }
 
@@ -327,7 +397,9 @@ private struct ChatContent: View {
         } else if let mute = store.mute(convId) {
             disabledBar(mutedText(mute))
         } else {
-            Composer(text: $text, emojiOpen: $emojiOpen, handle: handle, onSend: send)
+            Composer(
+                text: $text, emojiOpen: $emojiOpen, plusOpen: $plusOpen, handle: handle, showPlus: model.filesEnabled,
+                onSend: send, onPick: pick)
         }
     }
 
@@ -477,8 +549,9 @@ private struct BubbleRow: View {
     @Environment(IMStore.self) private var store
     @Environment(\.colorScheme) private var scheme
 
-    private var supported: Bool { message.type == .text }
-    private var hasMenu: Bool { supported || message.status == .failed }
+    private var supported: Bool { [.text, .image, .file].contains(message.type) }
+    private var isText: Bool { message.type == .text }
+    private var hasMenu: Bool { isText || message.status == .failed }
 
     var body: some View {
         HStack(alignment: .top, spacing: TS.s2) {
@@ -496,6 +569,9 @@ private struct BubbleRow: View {
                     if isSelf { status }
                     MaxWidth(width: maxBubble) { bubble }
                 }
+                if message.isAttachment, isSelf, message.seq == nil {
+                    AttachmentStatus(message: message, convId: convId)
+                }
             }
             if isSelf { avatar }
             if !isSelf { Spacer(minLength: 0) }
@@ -510,7 +586,7 @@ private struct BubbleRow: View {
         } label: {
             Avatar(
                 id: message.from, name: store.displayName(message.from), size: 40,
-                src: store.profile(message.from)?.avatar)
+                src: store.profile(message.from)?.avatar, local: isSelf ? model.media?.localAvatar : nil)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("查看 \(store.displayName(message.from)) 的资料")
@@ -526,7 +602,14 @@ private struct BubbleRow: View {
                 let id = message.clientMsgId
                 let client = store.client
                 let conv = convId
-                model.hub.confirm(id: "retry-dialog", text: "重发该消息？", ok: "重发") { client.retry(conv, id) }
+                if attachmentDeleteOnly(message) {
+                    // The source is gone: only deleting is left (F-FILE-07 rule 4).
+                    model.hub.confirm(id: "delete-dialog", text: sourceMissingText, ok: "删除", danger: true) {
+                        client.removeFailed(conv, id)
+                    }
+                } else {
+                    model.hub.confirm(id: "retry-dialog", text: "重发该消息？", ok: "重发") { client.retry(conv, id) }
+                }
             } label: {
                 Icon(name: .failed, size: 20)
                     .foregroundStyle(TC.danger)
@@ -536,7 +619,7 @@ private struct BubbleRow: View {
             .buttonStyle(.plain)
             .accessibilityLabel("发送失败，点击重发")
             .accessibilityIdentifier("failed-icon")
-        case .queued, .sending, .processing, .uploading: // 附件的两种状态（F-FILE-07），页面在 FE-637 细化
+        case .queued, .sending, .processing, .uploading:
             Spinner()
                 .foregroundStyle(TC.textTertiary)
                 .accessibilityElement()
@@ -554,6 +637,25 @@ private struct BubbleRow: View {
     }
 
     @ViewBuilder private var bubble: some View {
+        switch message.type {
+        case .image:
+            withMenu(ImageBubble(message: message, convId: convId))
+        case .file:
+            withMenu(FileBubble(message: message, convId: convId, isSelf: isSelf))
+        default:
+            textBubble
+        }
+    }
+
+    @ViewBuilder private func withMenu<V: View>(_ v: V) -> some View {
+        if hasMenu {
+            v.contextMenu { menu }
+        } else {
+            v
+        }
+    }
+
+    @ViewBuilder private var textBubble: some View {
         let content = Text(supported ? (message.body.text ?? "") : "[暂不支持的消息]")
             .font(TTFont.body)
             .foregroundStyle(foreground)
@@ -581,7 +683,7 @@ private struct BubbleRow: View {
 
     /// Reads the live message at tap time: a message deleted while the menu was open has no text left to copy.
     @ViewBuilder private var menu: some View {
-        if supported {
+        if isText {
             Button("复制") {
                 let live = store.messages(convId).first { $0.clientMsgId == message.clientMsgId }
                 guard let text = live?.body.text, live?.deleted != true else { return }
@@ -590,7 +692,7 @@ private struct BubbleRow: View {
             }
         }
         if message.status == .failed {
-            Button("重发") { store.client.retry(convId, message.clientMsgId) }
+            if !attachmentDeleteOnly(message) { Button("重发") { store.client.retry(convId, message.clientMsgId) } }
             Button("删除", role: .destructive) { store.client.removeFailed(convId, message.clientMsgId) }
         }
     }

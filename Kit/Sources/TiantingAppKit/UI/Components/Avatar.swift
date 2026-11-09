@@ -9,6 +9,8 @@ struct Avatar: View {
     let size: CGFloat
     var group = false
     var src: String?
+    /// This login's new own avatar, from the uploaded file (F-ACC-06; the test environment's public address is http).
+    var local: URL?
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: group ? TR.group : size / 2, style: .continuous)
@@ -19,7 +21,11 @@ struct Avatar: View {
                 .foregroundStyle(TC.onBrand)
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)
-            if let url = httpsURL(src) {
+            if let local, let image = UIImage(contentsOfFile: local.path) {
+                Image(uiImage: image).resizable().scaledToFill()
+                    .frame(width: size, height: size)
+                    .clipShape(shape)
+            } else if let url = httpsURL(src) {
                 AsyncImage(url: url) { phase in
                     if case .success(let image) = phase {
                         image.resizable().scaledToFill()

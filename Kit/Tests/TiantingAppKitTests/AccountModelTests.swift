@@ -51,7 +51,7 @@ final class AccountModelTests: XCTestCase {
         sessions: store,
         theme: ThemeController(prefs: prefs),
         prefs: prefs,
-        makeClient: { [fake] _ in fake.client },
+        makeClient: { [fake] _, _ in fake.client },
         makeAccount: { [http, fake] _, s in fakeAccount(store: s, clock: fake.clock, http: http) })
 
     private var dayLater: Int64 { fake.clock.now() + 86_400_000 }

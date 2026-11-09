@@ -80,7 +80,8 @@ public func permissionTips(_ messages: [Message], tips: [String: Int]?) -> [Stri
 public func conversationSummary(_ conv: Conversation, me: String, senderName: (String) -> String) -> String {
     guard let m = conv.lastMsg else { return "" }
     if m.deleted == true { return messageDeletedText }
-    let body = m.type == "text" || m.type == "tip" ? (m.text ?? "") : "[暂不支持的消息]"
+    // Images and files show a fixed word, never a file name (F-FILE-02 rule 5, F-FILE-03 rule 5, AC-FILE-02-8, 03-8).
+    let body = m.type == "text" || m.type == "tip" ? (m.text ?? "") : attachmentSummary(m.type) ?? "[暂不支持的消息]"
     if conv.type == .group, m.type != "tip", m.from != me, !m.from.isEmpty {
         return "\(senderName(m.from)): \(body)"
     }

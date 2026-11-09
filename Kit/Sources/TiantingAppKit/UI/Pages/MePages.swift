@@ -17,10 +17,13 @@ struct CopyButton: View {
     }
 }
 
-/// Me (PRD-ui F-UI-15, F-ACC-06): an account edits its nickname; the avatar comes with C2.
+/// Me (PRD-ui F-UI-15, F-ACC-06): an account edits its nickname and, with `features.files`, its avatar (AC-ACC-06-6).
 struct MePage: View {
     @Environment(AppModel.self) private var model
     @Environment(IMStore.self) private var store
+    @State private var editAvatar = false
+
+    private var canEditAvatar: Bool { model.session?.mode == .account && model.filesEnabled }
 
     var body: some View {
         let profile = store.profile(store.me)
@@ -28,7 +31,18 @@ struct MePage: View {
         ScrollView {
             VStack(spacing: TS.s3) {
                 HStack(spacing: TS.s3) {
-                    Avatar(id: store.me, name: name, size: 64, src: profile?.avatar)
+                    if canEditAvatar {
+                        Button {
+                            editAvatar = true
+                        } label: {
+                            Avatar(id: store.me, name: name, size: 64, src: profile?.avatar, local: model.media?.localAvatar)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("更换头像")
+                        .accessibilityIdentifier("me-avatar")
+                    } else {
+                        Avatar(id: store.me, name: name, size: 64, src: profile?.avatar, local: model.media?.localAvatar)
+                    }
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: TS.s1) {
                             Text(name)
@@ -72,6 +86,7 @@ struct MePage: View {
         }
         .background(TC.bg)
         .task(id: store.connected) { await store.loadProfiles([store.me]) }
+        .modifier(AvatarEditor(active: $editAvatar))
     }
 }
 

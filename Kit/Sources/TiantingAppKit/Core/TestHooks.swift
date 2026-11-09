@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// What only the UI tests can ask of a debug build, through the launch environment. Release builds have none of it.
@@ -25,7 +26,23 @@ enum TestHooks {
             guard let raw = env["TT_TEST_LEGACY_SESSION"], let i = raw.firstIndex(of: ":") else { return nil }
             return (String(raw[..<i]), String(raw[raw.index(after: i)...]))
         }
+        /// `TT_TEST_PICK_DIR=dir`: "图片" and "文件" take the files in this host directory (name order) instead of the system
+        /// pickers, which a UI test cannot drive (like Android's `pickForTest`, A26). The files are copied, then left alone.
+        static var pickDir: URL? { env["TT_TEST_PICK_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) } }
+        private nonisolated(unsafe) static var loadedImages = 0
+        private nonisolated(unsafe) static var lastDownload = ""
+        static func imageLoaded() { loadedImages += 1 }
+        /// The SHA-256 of the last finished file download (AC-FILE-03-1: the test compares it with what it sent).
+        static func downloaded(_ url: URL) {
+            guard let d = try? Data(contentsOf: url) else { return }
+            lastDownload = SHA256.hash(data: d).map { String(format: "%02x", $0) }.joined()
+        }
+        static var imagesLoaded: Int { loadedImages }
+        static var lastDownloadSHA: String { lastDownload }
     #else
+        static var pickDir: URL? { nil }
+        static func imageLoaded() {}
+        static func downloaded(_ url: URL) {}
         static func savedSession() {}
         static var forceOffline: Bool { false }
         static var copyFails: Bool { false }

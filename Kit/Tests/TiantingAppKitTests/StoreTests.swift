@@ -13,7 +13,7 @@ final class StoreTests: XCTestCase {
         let config = AppConfig(server: URL(string: "http://localhost:1"), demoLogin: true)
         let prefs = UIPrefs(defaults: UserDefaults(suiteName: "tt.store.\(UUID().uuidString)")!)
         let m = AppModel(
-            config: config, sessions: sessions, theme: ThemeController(prefs: prefs), makeClient: { _ in fake.client },
+            config: config, sessions: sessions, theme: ThemeController(prefs: prefs), makeClient: { _, _ in fake.client },
             makeAccount: { _, s in fakeAccount(store: s, clock: fake.clock) })
         return (m, fake)
     }

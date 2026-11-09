@@ -33,6 +33,8 @@ public final class AppModel {
     public private(set) var store: IMStore?
     /// This login's system notices (F-UI-44).
     public private(set) var notices: NoticeStore?
+    /// This login's images and files (FE-637, FE-638).
+    public private(set) var media: MediaOps?
     public private(set) var drafts = DraftStore()
     /// Kicked or the login ended: the dialog that cannot be dismissed (F-UI-18).
     public private(set) var fatal: FatalReason?
@@ -57,7 +59,7 @@ public final class AppModel {
     public let account: AccountClient
     @ObservationIgnored private let sessions: AccountSessionStore
     @ObservationIgnored private let prefs: UIPrefs
-    @ObservationIgnored private let makeClient: (AppConfig) -> IMClient
+    @ObservationIgnored private let makeClient: (AppConfig, FileClient?) -> IMClient
     @ObservationIgnored private let monitor = NWPathMonitor()
     @ObservationIgnored private var accountSubscription: IMSubscription?
     @ObservationIgnored private var logoutTask: Task<Void, Never>?
@@ -74,7 +76,7 @@ public final class AppModel {
         sessions: AccountSessionStore,
         theme: ThemeController = ThemeController(),
         prefs: UIPrefs = UIPrefs(),
-        makeClient: ((AppConfig) -> IMClient)? = nil,
+        makeClient: ((AppConfig, FileClient?) -> IMClient)? = nil,
         makeAccount: ((AppConfig, AccountSessionStore) -> AccountClient)? = nil
     ) {
         self.config = config
@@ -83,6 +85,7 @@ public final class AppModel {
         self.prefs = prefs
         self.makeClient = makeClient ?? AppModel.liveClient
         prefs.removeAll(prefix: "ui.noticeVersion.")  // Named with the plain user id and kept after logout (issue A2).
+        MediaOps.clearTemp()  // Picked and processed copies an earlier run left (killed while processing).
         account = makeAccount?(config, sessions) ?? AppModel.liveAccount(config, sessions)
         cachedConfig = prefs.get(Self.configKey).flatMap { try? JSONDecoder().decode(CachedConfig.self, from: Data($0.utf8)) }
         accountSubscription = account.on { [weak self] in self?.handle($0) }
@@ -102,11 +105,34 @@ public final class AppModel {
             .appendingPathComponent("tianting", isDirectory: true)
     }
 
-    private static func liveClient(_ config: AppConfig) -> IMClient {
+    private static func liveClient(_ config: AppConfig, _ files: FileClient?) -> IMClient {
         var options = IMClientOptions(url: config.webSocketURL ?? "wss://invalid.invalid/ws")
         options.platform = .ios
         options.databaseDirectory = databaseDirectory()
+        // Sandbox copies under the database directory (Application Support, excluded from backup by the SDK), downloads in
+        // Caches (F-FILE-07 rule 2, F-FILE-03 rule 3).
+        options.files = files
         return IMClient(options: options)
+    }
+
+    /// The SDK's sandbox (the default under the database directory).
+    static var attachmentRoot: URL? { databaseDirectory()?.appendingPathComponent("tianting-attachments", isDirectory: true) }
+
+    /// Files in the SDK's sandbox, every user: what the UI tests read through the debug probe (AC-FILE-07-5, 07-9).
+    nonisolated static func attachmentFileCount() -> Int {
+        guard let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("tianting/tianting-attachments"),
+            let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey])
+        else { return 0 }
+        var n = 0
+        for case let u as URL in e where (try? u.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true { n += 1 }
+        return n
+    }
+
+    /// `features.files` (F-FILE, 13.3): the "+" and the avatar entry are hidden when off.
+    public var filesEnabled: Bool {
+        if case .loaded(let c) = loginConfig { return c.features.files }
+        return cachedConfig?.files == true
     }
 
     private static func liveAccount(_ config: AppConfig, _ sessions: AccountSessionStore) -> AccountClient {
@@ -170,8 +196,14 @@ public final class AppModel {
     }
 
     private func begin(_ s: AccountSession) {
-        let client = makeClient(config)
+        // The file endpoints: account sessions through AccountClient (4011 per rule 7); demo sessions with their fixed token.
+        let auth: FileAuth = s.mode == .account ? account : StaticTokenAuth(baseUrl: config.apiBase, token: s.accessToken)
+        let files = FileClient(auth: auth)
+        let client = makeClient(config, files)
         let store = IMStore(client: client, me: s.userId)
+        let media = MediaOps(client: client, files: files)
+        store.onFilesExpired = { [weak media] ids in media?.forget(ids) }
+        self.media = media
         store.onFatal = { [weak self] reason in self?.stop(reason) }
         store.onSendFailed = { [weak self] _, _, error in
             // 4035 / 4036 / 4137 insert a tip in the chat page (F-UI-31), 4031 has the bar (F-UI-41 rule 5);
@@ -239,6 +271,8 @@ public final class AppModel {
     public func logout(keepNoticeSeen: Bool = false) {
         notices?.detach()
         notices = nil
+        media?.clear()
+        media = nil
         if !keepNoticeSeen, let userId = session?.userId { prefs.set(noticeSeenKey(userId), nil) }
         let client = store?.client
         if let client { closingClient = client }
@@ -301,6 +335,15 @@ public final class AppModel {
 
     public func logoutOthers(password: String) async throws {
         accept(try await account.logoutOthers(password: password), askNotice: false)
+    }
+
+    /// The avatar (F-ACC-06 rules 3, 4): upload kind=avatar, then PATCH profile. Shown from the local file in this login
+    /// (the SDK fetches the new address too, issue H13). A failure throws; the nickname is not touched here.
+    public func changeAvatar(_ jpeg: URL) async throws {
+        guard let media else { return }
+        let fileId = try await media.uploadAvatar(jpeg)
+        try await account.updateProfile(avatarFileId: fileId)
+        media.setLocalAvatar(jpeg)
     }
 
     public func requestRecoveryCode(password: String) async throws {

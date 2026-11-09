@@ -3,6 +3,7 @@ import SwiftUI
 /// Lucide icons (PRD-ui 6.6, ISC): template images tinted by foreground color. scripts/py/gen_icons.py makes the assets.
 enum IconName: String {
     case chats, contacts, me, plus, addFriend, forward, more, failed, loading, smile, users, newFriends, groups, settings
+    case image, file, close
 }
 
 struct Icon: View {

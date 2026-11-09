@@ -44,6 +44,8 @@ swift scripts/gen-app-icon.swift App/Assets.xcassets/AppIcon.appiconset/AppIcon.
 
 账号（PRD-chat C1）：`AppModel` 持有一个 `AccountClient`（进程内一个，"待退出"在它那里），每次登录一个 `IMClient`。登录页由 `GET /v1/config` 决定入口，失败不猜测模式；保存恢复码页在根视图替换全部内容，下面没有页面，返回手势没有去处。`UITests/AccountFakeServerTests.swift` 用测试进程里的假服务端（`UITests/AccountSupport.swift`，HTTP + WebSocket）覆盖真实服务端不能按需产生的状态，`UITests/AccountE2ETests.swift` 连真实 im-server。
 
+图片和文件（PRD-chat C2，FE-637、FE-638）：聊天页"+"（`GET /v1/config` 的 `features.files` 关时没有）用 PHPicker（不要相册完整权限，一次最多 9 张）和 `UIDocumentPicker`；选中的先复制到临时目录，图片轮到它时用 ImageIO 处理（`Core/ImageProcessing.swift`：先看头部像素上限，按 EXIF 方向转正后只写像素，去掉 ImageIO 自己加的 Exif 段，长边 4096，缩略图 480 ≤ 512 KiB，透明的 png，GIF 原样，HEIC 转 jpeg），再交给 SDK 复制进沙盒。气泡按宽高占位，缩略图只在行建出来时取，解码前查像素上限，缓存键 `fileId:variant`；全屏看原图、存相册（`NSPhotoLibraryAddUsageDescription`，被拒提示"没有相册权限"和前往设置）；文件用 SDK 的 URLSession 下载到私有缓存，pdf、txt、图片可以"打开"（Quick Look），都可以"保存"（分享面板）。"我"页头像：裁剪 → 512×512 jpeg → `kind=avatar` → `PATCH profile`。`scripts/e2e-server.sh` 同时启动 `scripts/fake_s3.py`（127.0.0.1:18183）并打开 `IM_FILES_ENABLED`；`UITests/FilesE2ETests.swift`、`ZzFilesClockE2ETests.swift`（调服务端时钟，名字排在最后）。系统选择器测试点不了：调试构建里 `TT_TEST_PICK_DIR` 让"图片""文件"直接取这个目录里的文件。
+
 端到端用例的"另一个账号"是测试进程里的真实 `IMClient`：一台模拟器不能同时跑两份同一个 App。测试调用的服务端密钥由 `scripts/e2e-server.sh` 每次随机生成，只在本机临时目录。
 
 真机运行要在 Xcode 里给 target 选签名团队（工程里没写）。服务器地址：Debug 默认 `http://localhost:8080`，可以用启动环境变量 `TIANTING_SERVER` 改；Release 的 `TTServerURL` 留空，等正式接入方式定了再填（PRD-ui F-UI-03）。

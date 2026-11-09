@@ -56,5 +56,7 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>保存聊天里的图片到相册</string>
 </dict>
 </plist>
