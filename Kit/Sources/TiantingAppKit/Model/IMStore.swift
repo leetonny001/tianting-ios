@@ -107,6 +107,8 @@ public final class IMStore {
             break  // AppModel hears it from AccountClient, which also has it from HTTP.
         case .profileChanged:
             profileVersion += 1
+        case .filesExpired:
+            break  // 图片缓存的清理随 FE-638
         }
     }
 

@@ -810,14 +810,10 @@ final class AccountE2ETests: E2ECase {
         try await sleep(3000)
         XCTAssertEqual(saves(), first, "no refresh after the limit either, events \(p.events)")
         XCTAssertEqual(p.upgrades, sockets, "no reconnect, events \(p.events)")
-        // The server's `kicked/tokenExpired` at the limit (the JWT's `exp` is whole seconds, so up to 1 s early) makes the
-        // app ask once; since F2 the server answers 401 / 4019 expired. At most that one ask, and nothing succeeded.
+        // The server's `kicked/tokenExpired` at the limit (the JWT's `exp` is whole seconds, so up to 1 s early) no longer
+        // makes the app ask (P-35 L1: the access expiry is the absolute limit, so the SDK ends the session at once).
         let asks = p.events.filter { $0 == "req:POST /v1/account/token/refresh" }.count
-        XCTAssertLessThanOrEqual(asks, 1, "events \(p.events)")
-        if asks == 1 {
-            let tail = Array(p.events.drop { $0 != "req:POST /v1/account/token/refresh" })
-            XCTAssertEqual(Array(tail.dropFirst().prefix(2)), ["status:401", "http:4019"], "refused as expired: \(p.events)")
-        }
+        XCTAssertEqual(asks, 0, "no refresh request at all, events \(p.events)")
         print("TC-ACC-03-45 events: \(p.events)")
         try await tap("kicked-ok")
         try await see("login-use-account")

@@ -96,6 +96,8 @@ public func conversationAvatarId(_ conv: Conversation, me: String) -> String {
 /// Copy text of a message: "" unless it is plain text.
 public func messageStatusValue(_ status: MessageStatus) -> String {
     switch status {
+    case .processing: return "处理中"
+    case .uploading: return "上传中"
     case .queued: return "排队中"
     case .sending: return "发送中"
     case .sent: return "已发送"

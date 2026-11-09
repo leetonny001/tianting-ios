@@ -536,7 +536,7 @@ private struct BubbleRow: View {
             .buttonStyle(.plain)
             .accessibilityLabel("发送失败，点击重发")
             .accessibilityIdentifier("failed-icon")
-        case .queued, .sending:
+        case .queued, .sending, .processing, .uploading: // 附件的两种状态（F-FILE-07），页面在 FE-637 细化
             Spinner()
                 .foregroundStyle(TC.textTertiary)
                 .accessibilityElement()
