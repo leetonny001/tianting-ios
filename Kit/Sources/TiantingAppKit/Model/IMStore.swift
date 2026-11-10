@@ -42,6 +42,8 @@ public final class IMStore {
     public var onSendFailed: ((String, String, SendFailure) -> Void)?
     /// Files expired or deleted: decoded images and running downloads go (F-FILE-06 rule 3).
     public var onFilesExpired: (([String]) -> Void)?
+    /// A running download of a recalled (true), deleted or expired (false) file was stopped (AC-RCL-03-12, issue 33).
+    public var onDownloadAborted: ((String, Bool) -> Void)?
     @ObservationIgnored private var subscription: IMSubscription?
     @ObservationIgnored private var activeConv: String?
 
@@ -111,6 +113,8 @@ public final class IMStore {
             profileVersion += 1
         case .filesExpired(let ids):
             onFilesExpired?(ids)
+        case .downloadAborted(let fileId, let recalled):
+            onDownloadAborted?(fileId, recalled)
         }
     }
 

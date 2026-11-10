@@ -188,9 +188,14 @@ struct TestStateProbe: View {
                 .accessibilityValue(value)
                 .task {
                     let store = KeychainSessionStore()
+                    var tick = 0
+                    var scan = -1
                     while !Task.isCancelled {
                         #if DEBUG
-                            value = "session=\(store.isEmpty ? 0 : 1) pending=\(store.pendingCount) class=\(store.accessibleClass) att=\(AppModel.attachmentFileCount()) img=\(TestHooks.imagesLoaded) dl=\(TestHooks.lastDownloadSHA) saves=\(TestHooks.saveCount)"
+                            if tick % 10 == 0 { scan = TestHooks.scanHits() }  // Reads every file: once a second.
+                            tick += 1
+                            let cache = TestHooks.downloadCache()
+                            value = "session=\(store.isEmpty ? 0 : 1) pending=\(store.pendingCount) class=\(store.accessibleClass) att=\(AppModel.attachmentFileCount()) img=\(TestHooks.imagesLoaded) dl=\(TestHooks.lastDownloadSHA) saves=\(TestHooks.saveCount) scan=\(scan) cache=\(cache.files) part=\(cache.parts) cfdl=\(cache.urlSession)"
                         #endif
                         try? await Task.sleep(for: .milliseconds(100))
                     }

@@ -155,10 +155,11 @@ struct AttachPanel: View {
 struct ImageBubble: View {
     let message: Message
     let convId: String
+    /// Full screen is the chat page's: it closes when the message is recalled or deleted (AC-RCL-03-8).
+    let onOpen: () -> Void
     @Environment(AppModel.self) private var model
     @State private var load = ImageLoad.loading
     @State private var attempt = 0
-    @State private var viewing = false
 
     private var body_: ImageBody? { message.body.image }
     private var fileId: String? { message.body.fileId }
@@ -191,9 +192,6 @@ struct ImageBubble: View {
         .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("image-bubble")
         .task(id: "\(fileId ?? "")-\(attempt)-\(body_?.expired == true)-\(media?.imageEpoch ?? 0)") { await loadThumb() }
-        .fullScreenCover(isPresented: $viewing) {
-            if let fileId { ImageViewer(fileId: fileId, mime: body_?.mime ?? "image/jpeg").environment(model) }
-        }
     }
 
     private var media: MediaOps? { model.media }
@@ -258,7 +256,7 @@ struct ImageBubble: View {
         if load == .failed {
             attempt += 1
         } else {
-            viewing = true
+            onOpen()
         }
     }
 }

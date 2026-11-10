@@ -83,7 +83,7 @@ struct ChatsPage: View {
                 ConvItem(
                     conv: conv,
                     remark: conv.type == .c2c ? remarks[conversationAvatarId(conv, me: store.me)] : nil,
-                    draft: model.drafts.draft(conv.convId))
+                    draft: model.drafts.text(conv.convId))
             }
             if store.truncated {
                 Text("仅显示最近 500 个会话")
@@ -109,6 +109,8 @@ private struct ConvItem: View {
     private var summary: String {
         conversationSummary(conv, me: store.me) { store.displayName($0) }
     }
+    /// "[有人@我]" over "[草稿]" (F-MEN-03 rule 2); with a mention the last message's summary follows (issue 38).
+    private var prefix: SummaryPrefix { summaryPrefix(conv, hasDraft: draft != nil) }
 
     var body: some View {
         Button {
@@ -161,7 +163,14 @@ private struct ConvItem: View {
     }
 
     @ViewBuilder private var summaryLine: some View {
-        if let draft {
+        if prefix == .mention {
+            // The same danger color as "[草稿]" (issue 38).
+            HStack(spacing: TS.s1) {
+                Text("[有人@我]").foregroundStyle(TC.danger).fixedSize()
+                Text(summary).foregroundStyle(TC.textSecondary).lineLimit(1)
+            }
+            .font(TTFont.small)
+        } else if prefix == .draft, let draft {
             HStack(spacing: TS.s1) {
                 Text("[草稿]").foregroundStyle(TC.danger).fixedSize()
                 Text(draft).foregroundStyle(TC.textSecondary).lineLimit(1)
@@ -175,7 +184,9 @@ private struct ConvItem: View {
     /// The whole row reads as one element: name, summary or draft, and unread.
     private var accessibilityText: String {
         var parts = [name]
-        if let draft {
+        if prefix == .mention {
+            parts.append("[有人@我] \(summary)")
+        } else if prefix == .draft, let draft {
             parts.append("[草稿] \(draft)")
         } else if conv.lastMsg != nil {
             parts.append(summary)

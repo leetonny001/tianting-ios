@@ -28,10 +28,13 @@ private let byCode: [Int: String] = [
     4041: "请求出错",
     4042: "用户不存在",
     4043: "群聊不存在或已解散",
+    4044: "消息不存在或已过期",
     4045: "该申请已过期",
     4046: "对方已不在群里",
     4090: "请求出错",
     4091: "你们已经是朋友了",
+    // Fallback without the window; recall picks by details.windowSeconds (recallErrorText).
+    4097: "发送时间超过 2 分钟，无法撤回",
     4130: "请求出错",
     4131: "请求出错",
     4132: "你的好友数量已达上限",
@@ -42,6 +45,7 @@ private let byCode: [Int: String] = [
     4137: "对方回复之前，发送的消息数量已达上限",
     4290: "发送太频繁，请稍后再试",
     4292: "今天的次数已用完，明天再试",
+    4293: "@所有人次数已用完",
     5000: "服务异常，请稍后重试",
     5030: "服务异常，请稍后重试",
 ]
@@ -73,7 +77,25 @@ public func errorCode(_ error: Error) -> Int {
     (error as? IMError)?.code ?? 5000
 }
 
+/// A console deletion (PRD-admin F-ADM-31). A recall shows the table of PRD-chat F-RCL-02 rule 1a (SDK `recallText`).
 public let messageDeletedText = "该消息已被删除"
+
+/// The message being viewed full screen or downloaded was recalled (AC-RCL-03-8, AC-RCL-03-12).
+public let messageRecalledText = "该消息已被撤回"
+
+/// A failed recall (AC-RCL-01-8, AC-RCL-02-5, issues 26, 37): 4097 by `details.windowSeconds` ("2 分钟", "7 天"); 4030
+/// "你没有权限撤回这条消息"; 4044 "消息不存在或已过期"; a timeout or a lost connection (not an `IMError`) reads as a server error.
+/// Never retried.
+public func recallErrorText(_ error: Error) -> String {
+    let code = errorCode(error)
+    var window: Int64?
+    switch (error as? IMError)?.details?["windowSeconds"] {
+    case .int(let v): window = v
+    case .double(let v): window = Int64(v)
+    default: window = nil
+    }
+    return messageFor(cmd: "recall", code: code, windowSeconds: window) ?? errorText(code)
+}
 
 /// 4034 and `kicked.reason = suspended` (F-UI-18, F-UI-43): no end time when permanent or missing.
 public func bannedText(until: Int64?) -> String {

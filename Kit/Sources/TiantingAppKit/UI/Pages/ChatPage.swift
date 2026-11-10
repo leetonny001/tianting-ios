@@ -38,7 +38,7 @@ private struct ChatContent: View {
     @State private var probe = ChatProbe.idle
     @State private var history = HistoryState.idle
     @State private var newCount = 0
-    @State private var text = ""
+    @State private var edit = EditState.empty
     @State private var emojiOpen = false
     @State private var handle = ComposerHandle()
     @State private var atBottom = true
@@ -46,6 +46,19 @@ private struct ChatContent: View {
     @State private var listWidth: CGFloat = 320
     @State private var plusOpen = false
     @State private var picking: PickKind?
+    /// The quote bar (F-QUO-01, AC-QUO-01-5): only the msgId, also in the draft (issue 41).
+    @State private var quoteId: String?
+    /// The @ picker is open for the @ at this position (F-MEN-01 rule 5).
+    @State private var pickerAt: Int?
+    /// The image shown full screen (by clientMsgId): closes with a toast when it is recalled or deleted (AC-RCL-03-8).
+    @State private var viewer: String?
+    /// After a jump (quote, "有人@我") the row with this seq is highlighted for 2 seconds.
+    @State private var highlight: Int64?
+    @State private var jump = JumpRequest(seq: nil, tick: 0)
+    /// "有人@我" (F-MEN-03 rule 3): firstMentionSeq, taken once when the page opens (the server clears it once read, issue 40).
+    @State private var mentionAt: Int64?
+    @State private var mentionTaken = false
+    @State private var listHeight: CGFloat = 600
 
     private var isGroup: Bool { type == .group }
     private var conv: Conversation? { store.conversation(convId) }
@@ -55,6 +68,10 @@ private struct ChatContent: View {
     private var block: ChatBlock? { chatBlock(snapshot: snapshot, probe: probe) }
     /// Group not in the list and no snapshot: ask the server first; until then neither input nor "not in group" (G-UI-26).
     private var probing: Bool { isGroup && unknown && probe != .notMember && probe != .notFound }
+    /// Quote, recall and @ (C4): only with features.msgActions (PRD-ui F-UI-09 rule 4).
+    private var actionsOn: Bool { model.msgActionsEnabled }
+    /// @ opens the picker only in a group with the switch on (AC-MEN-01-6).
+    private var canMention: Bool { isGroup && actionsOn }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -63,6 +80,7 @@ private struct ChatContent: View {
                 list
                 if newCount > 0 { newPill }
             }
+            .overlay(alignment: .topTrailing) { if mentionAt != nil { mentionJump } }
             bottomBar
         }
         .background(TC.chatBg)
@@ -81,28 +99,49 @@ private struct ChatContent: View {
             }
         }
         .onAppear {
+            // Before this page marks the conversation read, which clears the count here (issue 40).
+            takeMention()
             store.setActive(convId)
             if let draft = model.drafts.draft(convId) {
-                text = draft
+                // Text, @ ranges and the quote bar come back (AC-MEN-01-10).
+                edit = EditState(text: draft.text, ranges: canMention ? draft.mentions : [])
+                quoteId = actionsOn ? draft.quote : nil
                 model.drafts.remove(convId)
             }
             #if DEBUG
                 // UI tests: long text without typing thousands of characters (AC-UI-10-4).
-                if let seed = ProcessInfo.processInfo.environment["TT_TEST_COMPOSER_TEXT"], text.isEmpty {
-                    text = String(repeating: "字", count: Int(seed) ?? 0)
+                if let seed = ProcessInfo.processInfo.environment["TT_TEST_COMPOSER_TEXT"], edit.text.isEmpty {
+                    edit = EditState(text: String(repeating: "字", count: Int(seed) ?? 0))
                 }
             #endif
         }
         .onDisappear {
             store.clearActive(convId)
-            if block == nil { model.drafts.put(convId, text) }
+            if block == nil { model.drafts.put(convId, Draft(text: edit.text, mentions: edit.ranges, quote: quoteId)) }
         }
         .onChange(of: block) { _, next in
             // F-UI-33 rule 5: what was typed is not kept.
             if next != nil {
-                text = ""
+                edit = .empty
+                quoteId = nil
+                pickerAt = nil
                 model.drafts.remove(convId)
                 emojiOpen = false
+            }
+        }
+        .task(id: conv == nil) { takeMention() }
+        .onChange(of: viewing?.deleted) { _, deleted in
+            // The image shown full screen was recalled or deleted: close it and say so (AC-RCL-03-8).
+            guard viewer != nil, deleted == true else { return }
+            let recalled = viewing?.recalled == true
+            viewer = nil
+            model.hub.show(recalled ? messageRecalledText : messageDeletedText)
+        }
+        .fullScreenCover(isPresented: Binding(get: { viewerFileId != nil }, set: { if !$0 { viewer = nil } })) {
+            if let fileId = viewerFileId {
+                ImageViewer(fileId: fileId, mime: viewing?.body.image?.mime ?? "image/jpeg")
+                    .environment(model)
+                    .environment(store)
             }
         }
         .task(id: "\(store.connected)") { await probeIfUnknown() }
@@ -119,6 +158,128 @@ private struct ChatContent: View {
             case nil: EmptyView()
             }
         }
+    }
+
+    private var viewing: Message? {
+        guard let viewer else { return nil }
+        return messages.first { $0.clientMsgId == viewer }
+    }
+
+    private var viewerFileId: String? {
+        guard let m = viewing, m.deleted != true, let id = m.body.fileId, !id.isEmpty else { return nil }
+        return id
+    }
+
+    // MARK: Recall, quote, mentions (FE-669, FE-670)
+
+    private func takeMention() {
+        guard !mentionTaken, let conv else { return }
+        mentionTaken = true
+        if actionsOn, (conv.mentionUnread ?? 0) > 0 { mentionAt = conv.firstMentionSeq }
+    }
+
+    private func act(_ action: MenuAction, _ m: Message) {
+        switch action {
+        case .copy:
+            // The live message: one deleted while the menu was open has no text left to copy.
+            let live = store.messages(convId).first { $0.clientMsgId == m.clientMsgId }
+            guard let text = live?.body.text, live?.deleted != true else { return }
+            UIPasteboard.general.string = text
+            model.hub.show("已复制")
+        case .quote:
+            guard let id = m.msgId else { return }
+            quoteId = id
+            handle.focus()  // F-UI-10 rule 7
+        case .recall:
+            // 4097 by windowSeconds, 4030 "你没有权限撤回这条消息" (AC-RCL-02-5); never retried (issue 26). On success the SDK
+            // shows the recall here at once.
+            guard let id = m.msgId else { return }
+            let client = store.client
+            let hub = model.hub
+            let conv = convId
+            Task {
+                do {
+                    try await client.recall(conv, id)
+                } catch {
+                    hub.show(recallErrorText(error))
+                }
+            }
+        case .retry:
+            store.client.retry(convId, m.clientMsgId)  // The menu's "重发" does not ask again (F-UI-09 rule 3).
+        case .delete:
+            store.client.removeFailed(convId, m.clientMsgId)
+        }
+    }
+
+    /// Jumps to `seq` (F-QUO-02 rule 5): pages up while it is within `limit` of the loaded range ("有人@我" passes no
+    /// limit and pages until it is there, issue 40), then scrolls and highlights.
+    private func jumpTo(_ seq: Int64?, limit: Int64) async {
+        while true {
+            let loaded = store.client.messages(convId).compactMap(\.seq)
+            switch jumpPlan(seq, loaded: loaded, limit: limit) {
+            case .here:
+                jump = JumpRequest(seq: seq, tick: jump.tick + 1)
+                return
+            case .tooEarly:
+                model.hub.show("消息太早，请翻页查看")
+                return
+            case .missing:
+                model.hub.show("消息不存在")
+                return
+            case .load(let count):
+                if history == .end {
+                    model.hub.show("消息不存在")
+                    return
+                }
+                if history == .loading {
+                    try? await Task.sleep(for: .milliseconds(100))
+                    continue
+                }
+                let before = store.messages(convId)
+                anchorId = before.first?.clientMsgId  // Keep the place while rows go on top.
+                history = .loading
+                do {
+                    let more = try await store.client.loadHistory(convId, limit: count)
+                    history = more ? .idle : .end
+                    if store.messages(convId).count == before.count { anchorId = nil }
+                    if !more, !store.client.messages(convId).contains(where: { $0.seq == seq }) {
+                        model.hub.show("消息不存在")
+                        return
+                    }
+                } catch {
+                    history = .error
+                    anchorId = nil
+                    return
+                }
+            }
+        }
+    }
+
+    private var mentionJump: some View {
+        Button {
+            let seq = mentionAt
+            mentionAt = nil
+            Task { await jumpTo(seq, limit: .max) }
+        } label: {
+            Text("有人@我")
+                .font(TTFont.caption)
+                .foregroundStyle(TC.onBrand)
+                .padding(.horizontal, TS.s3)
+                .padding(.vertical, TS.s2)
+                .frame(minHeight: Tokens.Size.touchMin)
+                .background(TC.brandFill, in: Capsule())
+        }
+        .padding(TS.s3)
+        .accessibilityLabel("有人@我，点击查看")
+        .accessibilityIdentifier("mention-jump")
+    }
+
+    private func pickMention(name: String, userId: String?) {
+        guard let at = pickerAt else { return }
+        pickerAt = nil
+        let r = insertMention(edit.text, edit.ranges, at: at, name: name, userId: userId)
+        edit = EditState(text: r.text, selStart: r.caret, ranges: r.ranges)
+        handle.focus()
     }
 
     // MARK: Images and files (FE-637)
@@ -255,7 +416,21 @@ private struct ChatContent: View {
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
             .accessibilityIdentifier("message-list")
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { listWidth = $0 }
+            .onGeometryChange(for: CGSize.self) { $0.size } action: {
+                listWidth = $0.width
+                listHeight = $0.height
+            }
+            .onChange(of: jump) { _, next in
+                guard let seq = next.seq, let id = messages.first(where: { $0.seq == seq })?.clientMsgId else { return }
+                // A lazy stack estimates rows it has not built: scroll again once they are there (AC-QUO-02-3, AC-MEN-03-6).
+                DispatchQueue.main.async { proxy.scrollTo(id, anchor: .center) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { proxy.scrollTo(id, anchor: .center) }
+                highlight = seq
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    if highlight == seq { highlight = nil }
+                }
+            }
             .onChange(of: messages) { old, new in
                 handleMessagesChange(old: old, new: new, proxy: proxy)
             }
@@ -321,7 +496,12 @@ private struct ChatContent: View {
                         .padding(.vertical, TS.s3)
                 case .message(let m):
                     messageRow(m, tip: tips[m.clientMsgId], maxBubble: maxBubble)
+                        .modifier(Highlight(on: m.seq != nil && m.seq == highlight))
                         .modifier(TopRowTrigger(active: m.clientMsgId == firstMessageId, onReachTop: reachedTop))
+                        .modifier(
+                            VisibleTrigger(active: m.seq != nil && m.seq == mentionAt, height: listHeight) {
+                                mentionAt = nil  // That message is in view: no button (issue 40).
+                            })
                 }
             }
             .id(row.id)
@@ -335,7 +515,12 @@ private struct ChatContent: View {
     @ViewBuilder
     private func messageRow(_ m: Message, tip: Int?, maxBubble: CGFloat) -> some View {
         if m.deleted == true {
-            TipCapsule(text: messageDeletedText).accessibilityIdentifier("msg-deleted")
+            if let notice = recallNotice(convId: convId, message: m, me: store.me) {
+                // The table of F-RCL-02 rule 1a (F-UI-42 rule 4); no menu on recall or deletion lines (F-RCL-03 rule 6).
+                RecallRow(notice: notice)
+            } else {
+                TipCapsule(text: messageDeletedText).accessibilityIdentifier("msg-deleted")
+            }
         } else if m.type == .tip {
             TipRow(message: m, convId: convId)
         } else {
@@ -345,7 +530,12 @@ private struct ChatContent: View {
                 showName: isGroup && m.from != store.me,
                 maxBubble: maxBubble,
                 context: isGroup ? UserContext(source: .group, sourceRef: to) : UserContext(source: .conv),
-                convId: convId)
+                convId: convId,
+                actionsOn: actionsOn,
+                myRole: conv?.myRole,
+                onAction: { act($0, m) },
+                onQuote: { q in Task { await jumpTo(q.seq, limit: quoteJumpMax) } },
+                onOpenImage: { viewer = m.clientMsgId })
             if let tip {
                 permissionTip(tip)
             }
@@ -398,8 +588,22 @@ private struct ChatContent: View {
             disabledBar(mutedText(mute))
         } else {
             Composer(
-                text: $text, emojiOpen: $emojiOpen, plusOpen: $plusOpen, handle: handle, showPlus: model.filesEnabled,
-                onSend: send, onPick: pick)
+                edit: $edit, emojiOpen: $emojiOpen, plusOpen: $plusOpen, handle: handle, showPlus: model.filesEnabled,
+                canMention: canMention,
+                quoteText: actionsOn ? quoteId.map { id in quoteBarText(messages.first { $0.msgId == id }) { store.displayName($0) } } : nil,
+                onQuoteCancel: { quoteId = nil },
+                onMention: { pickerAt = $0 },
+                onSend: send, onPick: pick
+            )
+            .sheet(
+                isPresented: Binding(get: { pickerAt != nil }, set: { if !$0 { pickerAt = nil } }),
+                onDismiss: { handle.focus() }  // Closed without a pick: the @ stays as plain text (issue 39).
+            ) {
+                MentionPicker(groupId: to, myRole: conv?.myRole, onPick: pickMention) { pickerAt = nil }
+                    .environment(model)
+                    .environment(store)
+                    .presentationDetents([.medium, .large])
+            }
         }
     }
 
@@ -414,10 +618,15 @@ private struct ChatContent: View {
             .accessibilityIdentifier("composer-disabled")
     }
 
+    /// The quote goes up as its msgId only; mentions only in a group, from ranges that still start with an @ (AC-MEN-01-5).
+    /// With the switch off neither is sent.
     private func send() {
+        let quote = actionsOn ? quoteId.map { QuoteRef(msgId: $0) } : nil
+        let mentions = canMention ? mentionsToSend(edit.text, edit.ranges) : nil
         do {
-            if case .ok = try store.client.send(convId, text) {
-                text = ""
+            if case .ok = try store.client.send(convId, edit.text, quote: quote, mentions: mentions) {
+                edit = .empty
+                quoteId = nil
                 atBottom = true
             }
         } catch {
@@ -489,6 +698,66 @@ private struct JumpBridge: View {
     }
 }
 
+/// A jump target for the list's reader; the tick makes the same seq jump again.
+private struct JumpRequest: Equatable {
+    var seq: Int64?
+    var tick: Int
+}
+
+/// The jump target's row (AC-QUO-02-3, AC-MEN-03-6): `surfaceSelected` behind it for 2 seconds (the same token as H5 and
+/// Android, issue 48), and an element that says where the jump landed.
+private struct Highlight: ViewModifier {
+    let on: Bool
+
+    func body(content: Content) -> some View {
+        if on {
+            content
+                .background(TC.surfaceSelected, in: RoundedRectangle(cornerRadius: TR.md))
+                .overlay(alignment: .topLeading) {
+                    Color.clear.frame(width: 1, height: 1)
+                        .accessibilityElement()
+                        .accessibilityLabel("已定位到这条消息")
+                        .accessibilityIdentifier("msg-highlight")
+                }
+        } else {
+            content
+        }
+    }
+}
+
+/// Fires once the row is inside the list's visible height ("有人@我" goes once that message is in view, issue 40).
+private struct VisibleTrigger: ViewModifier {
+    let active: Bool
+    let height: CGFloat
+    let onVisible: () -> Void
+
+    func body(content: Content) -> some View {
+        if active {
+            content.onGeometryChange(for: Bool.self) { proxy in
+                let frame = proxy.frame(in: .scrollView)
+                return frame.maxY > 0 && frame.minY < height
+            } action: { visible in
+                if visible { onVisible() }
+            }
+        } else {
+            content
+        }
+    }
+}
+
+/// A recall line (PRD-chat F-RCL-02 rule 1a): the same table as the list summary, names by the local rule (remark first).
+/// No menu (F-RCL-03 rule 6).
+private struct RecallRow: View {
+    let notice: RecallNotice
+    @Environment(IMStore.self) private var store
+
+    var body: some View {
+        TipCapsule(text: recallText(notice) { store.displayName($0) })
+            .accessibilityIdentifier("msg-recalled")
+            .task(id: notice) { await store.loadProfiles([notice.operatorId, notice.sender].filter { $0 != store.me }) }
+    }
+}
+
 /// Centered small text in a capsule: tips and deleted messages (F-UI-40 rule 1, F-UI-42 rule 1). No menu, no avatar.
 private struct TipCapsule: View {
     let text: String
@@ -537,7 +806,8 @@ private struct TipRow: View {
 }
 
 /// A message bubble (F-UI-07, F-UI-08): avatar on the outer side, status on the inner side; a long press opens the system
-/// menu (PRD-ui 3.4). Messages without menu items get no menu at all (F-UI-09 rule 5).
+/// menu (PRD-ui 3.4). Messages without menu items get no menu at all (F-UI-09 rule 5). C4: sent images and files have a
+/// menu too (quote, recall); the quote sits on top of the bubble; a message that mentions me is outlined.
 private struct BubbleRow: View {
     let message: Message
     let isSelf: Bool
@@ -545,13 +815,32 @@ private struct BubbleRow: View {
     let maxBubble: CGFloat
     let context: UserContext
     let convId: String
+    let actionsOn: Bool
+    let myRole: GroupRole?
+    let onAction: (MenuAction) -> Void
+    let onQuote: (QuoteView) -> Void
+    let onOpenImage: () -> Void
     @Environment(AppModel.self) private var model
     @Environment(IMStore.self) private var store
     @Environment(\.colorScheme) private var scheme
 
     private var supported: Bool { [.text, .image, .file].contains(message.type) }
-    private var isText: Bool { message.type == .text }
-    private var hasMenu: Bool { isText || message.status == .failed }
+    /// Whether a long press does anything. The items themselves are worked out when the menu opens (`MessageMenu`):
+    /// "撤回" follows the server time then, not when this row was drawn (AC-RCL-01-8).
+    private var items: [MenuAction] {
+        menuItems(message, actionsOn: actionsOn, canRetry: !attachmentDeleteOnly(message)) {
+            store.client.messageActions(message, myRole: myRole)
+        }
+    }
+    private var hasMenu: Bool { !items.isEmpty }
+    /// Bumped when a recall time limit passes (2 minutes, 7 days after `ts` by server time): SwiftUI builds the context
+    /// menu with the row, so the row is drawn again then and the next long press has no "撤回" (AC-RCL-01-8). A redraw
+    /// while the menu is open would change the open menu too, so then it waits until the menu closes: a tap on "撤回"
+    /// after the limit gets the server's 4097 (issue 37).
+    @State private var recallEpoch = 0
+    @State private var menuOpen = false
+    @State private var epochPending = false
+    private var mentioned: Bool { actionsOn && mentionsMe(message, me: store.me) }
 
     var body: some View {
         HStack(alignment: .top, spacing: TS.s2) {
@@ -578,6 +867,18 @@ private struct BubbleRow: View {
         }
         .padding(.vertical, TS.s3 / 2)
         .task(id: message.from) { await store.loadProfiles([message.from]) }
+        .task(id: "\(message.clientMsgId)|\(message.status)|\(message.deleted == true)|\(recallEpoch)") {
+            guard items.contains(.recall) else { return }
+            let now = store.client.serverNow()
+            guard let deadline = [recallWindowMs, groupRecallWindowMs].map({ message.ts + $0 }).first(where: { $0 > now })
+            else { return }
+            try? await Task.sleep(for: .milliseconds(deadline - now + 300))
+            if Task.isCancelled { return }
+            if menuOpen { epochPending = true } else { recallEpoch += 1 }
+        }
+        .task(id: message.body.quote?.from) {
+            if let from = message.body.quote?.from, !from.isEmpty { await store.loadProfiles([from]) }
+        }
     }
 
     private var avatar: some View {
@@ -639,61 +940,131 @@ private struct BubbleRow: View {
     @ViewBuilder private var bubble: some View {
         switch message.type {
         case .image:
-            withMenu(ImageBubble(message: message, convId: convId))
+            withMenu(ImageBubble(message: message, convId: convId, onOpen: onOpenImage), shape: RoundedRectangle(cornerRadius: TR.lg))
         case .file:
-            withMenu(FileBubble(message: message, convId: convId, isSelf: isSelf))
+            withMenu(FileBubble(message: message, convId: convId, isSelf: isSelf), shape: RoundedRectangle(cornerRadius: TR.lg))
         default:
             textBubble
         }
     }
 
-    @ViewBuilder private func withMenu<V: View>(_ v: V) -> some View {
+    /// The menu, and the same items as accessibility actions (13.4: a long-press menu needs an assistive way in; VoiceOver
+    /// lists them under "操作").
+    @ViewBuilder private func withMenu<V: View, S: Shape>(_ v: V, shape: S) -> some View {
         if hasMenu {
-            v.contextMenu { menu }
+            v.contextMenu {
+                MessageMenu(
+                    message: message, convId: convId, actionsOn: actionsOn, myRole: myRole, epoch: recallEpoch,
+                    onAction: onAction)
+            } preview: {
+                // The same bubble; it is on screen only while the menu is open. The preview is hosted on its own and
+                // gets no environment from the row: pass the models (an image bubble reads them).
+                v.environment(model).environment(store)
+                    .onAppear { menuOpen = true }
+                    .onDisappear {
+                        menuOpen = false
+                        if epochPending {
+                            epochPending = false
+                            recallEpoch += 1
+                        }
+                    }
+            }
+            .accessibilityActions {
+                ForEach(items, id: \.self) { a in
+                    Button(a.title) { onAction(a) }
+                }
+            }
         } else {
             v
         }
     }
 
     @ViewBuilder private var textBubble: some View {
-        let content = Text(supported ? (message.body.text ?? "") : "[暂不支持的消息]")
-            .font(TTFont.body)
-            .foregroundStyle(foreground)
-            .padding(.horizontal, TS.s3)
-            .padding(.vertical, TS.s2)
-            .background(isSelf ? TC.bubbleSelfBg : TC.bubbleOtherBg, in: bubbleShape)
-            .overlay {
-                // A 1px divider around others' bubbles in light mode only (PRD-ui 6.5).
-                if !isSelf, scheme == .light { bubbleShape.stroke(TC.divider, lineWidth: 1) }
+        let content = VStack(alignment: .leading, spacing: TS.s1) {
+            if let q = message.body.quote, actionsOn {
+                QuoteBlock(quote: q, color: foreground, onTap: { onQuote(q) })
             }
-            .contentShape(.contextMenuPreview, bubbleShape)
-            .accessibilityIdentifier("message")
-            .accessibilityValue(messageStatusValue(message.status))
-        if hasMenu {
-            content.contextMenu { menu }
-        } else {
-            content
+            Text(supported ? (message.body.text ?? "") : "[暂不支持的消息]")
+                .font(TTFont.body)
+                .foregroundStyle(foreground)
+                .accessibilityIdentifier("message")
+                .accessibilityLabel(mentioned ? "\(message.body.text ?? "")，提到了你" : (supported ? (message.body.text ?? "") : "[暂不支持的消息]"))
+                .accessibilityValue(messageStatusValue(message.status))
         }
+        .padding(.horizontal, TS.s3)
+        .padding(.vertical, TS.s2)
+        .background(isSelf ? TC.bubbleSelfBg : TC.bubbleOtherBg, in: bubbleShape)
+        .overlay {
+            if mentioned {
+                // Mentions me: the whole bubble is outlined in the brand color (F-MEN-01 rule 4; a token, dark follows).
+                bubbleShape.stroke(TC.brand, lineWidth: 2)
+            } else if !isSelf, scheme == .light {
+                // A 1px divider around others' bubbles in light mode only (PRD-ui 6.5).
+                bubbleShape.stroke(TC.divider, lineWidth: 1)
+            }
+        }
+        .contentShape(.contextMenuPreview, bubbleShape)
+        withMenu(content, shape: bubbleShape)
     }
 
     private var foreground: Color {
         if !supported { return TC.textSecondary }
         return isSelf ? TC.bubbleSelfText : TC.bubbleOtherText
     }
+}
 
-    /// Reads the live message at tap time: a message deleted while the menu was open has no text left to copy.
-    @ViewBuilder private var menu: some View {
-        if isText {
-            Button("复制") {
-                let live = store.messages(convId).first { $0.clientMsgId == message.clientMsgId }
-                guard let text = live?.body.text, live?.deleted != true else { return }
-                UIPasteboard.general.string = text
-                model.hub.show("已复制")
+/// The quote on top of a bubble (F-QUO-02 rule 3): the four states' text from the SDK's quoteLabel, a normal one with the
+/// original sender's name. `Text` with a String is plain text, nothing is parsed (AC-QUO-02-5). A tap jumps (rule 5).
+private struct QuoteBlock: View {
+    let quote: QuoteView
+    let color: Color
+    let onTap: () -> Void
+    @Environment(IMStore.self) private var store
+
+    var body: some View {
+        let text = quoteBlockText(quote) { store.displayName($0) }
+        Button(action: onTap) {
+            HStack(spacing: TS.s1 + 2) {
+                color.opacity(0.6).frame(width: 3).frame(minHeight: 20)
+                Text(verbatim: text)
+                    .font(TTFont.caption)
+                    .foregroundStyle(color)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
             }
+            .fixedSize(horizontal: false, vertical: true)
+            .contentShape(Rectangle())
         }
-        if message.status == .failed {
-            if !attachmentDeleteOnly(message) { Button("重发") { store.client.retry(convId, message.clientMsgId) } }
-            Button("删除", role: .destructive) { store.client.removeFailed(convId, message.clientMsgId) }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("引用：\(text)")
+        .accessibilityValue(quote.state.rawValue)
+        .accessibilityHint("查看引用的消息")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("msg-quote")
+    }
+}
+
+/// The context menu's items, worked out when it opens (AC-RCL-01-8): the menu stays as it was while open, so a recall
+/// tapped after the limit gets the server's 4097.
+private struct MessageMenu: View {
+    let message: Message
+    let convId: String
+    let actionsOn: Bool
+    let myRole: GroupRole?
+    /// The row's recall epoch: a new value makes this menu be built again.
+    let epoch: Int
+    let onAction: (MenuAction) -> Void
+    @Environment(IMStore.self) private var store
+
+    var body: some View {
+        let live = store.client.messages(convId).first { $0.clientMsgId == message.clientMsgId } ?? message
+        let items = menuItems(live, actionsOn: actionsOn, canRetry: !attachmentDeleteOnly(live)) {
+            store.client.messageActions(live, myRole: myRole)
+        }
+        ForEach(items, id: \.self) { a in
+            Button(a.title, role: a == .delete ? .destructive : nil) { onAction(a) }
+                .accessibilityIdentifier("menu-\(a.rawValue)")
         }
     }
 }

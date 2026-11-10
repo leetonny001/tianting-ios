@@ -459,7 +459,7 @@ final class PrefsAndSessionTests: XCTestCase {
         // AC-UI-24-3
         let d = DraftStore()
         d.put("c", "明天见")
-        XCTAssertEqual(d.draft("c"), "明天见")
+        XCTAssertEqual(d.draft("c")?.text, "明天见")
         d.put("c", "  \n")
         XCTAssertNil(d.draft("c"))
     }

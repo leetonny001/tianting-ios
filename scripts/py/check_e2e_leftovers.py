@@ -46,15 +46,23 @@ def main():
     # ("Post notification failed ... data:<SwiftUI.AccessibilityNode>: label"); seen first with the C2 tests. Those lines
     # are counted and reported, not failed (issue I12); every other line still fails the check.
     ax_hits = 0
+    cfn_name_hits = 0
     for line in entries:
         if "[com.apple.Accessibility:" in line and "Post notification failed" in line:
             if any(m in line for m in ["ZXQ-", "很长的消息内容", "收到，周六见", "你好bob"]):
                 ax_hits += 1
             continue
+        # CFNetwork logs a cancelled task's whole presigned URL, whose response-content-disposition carries the file name
+        # (seen with C4: a download stopped by a recall, TC-RCL-03-12). System logging like issue I11: counted, reported.
+        if "[com.apple.CFNetwork:" in line and "X-Amz-Signature" in line:
+            if "ZXQ-" in line:
+                cfn_name_hits += 1
+            continue
         for marker in ["ZXQ-", "很长的消息内容", "收到，周六见", "你好bob"]:
             if marker in line:
                 problems.append("os_log contains message text: " + marker)
     print("os_log: %d Accessibility notification-failure lines carry a test marker (system, issue I12)" % ax_hits)
+    print("os_log: %d CFNetwork task-failure lines carry a file name in a presigned URL (system logging, frontend-chat issue 51)" % cfn_name_hits)
     # AC-FILE-04-11: no presigned signature in the app's logs (file names carry "ZXQ-", checked above). The system's own
     # CFNetwork lines for a cancelled or failed task carry the failing URL with its query (NSErrorFailingURLStringKey);
     # the app cannot turn them off, so they are counted and reported, not failed (issue I11). com.apple.network logs the

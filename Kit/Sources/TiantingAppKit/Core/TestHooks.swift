@@ -39,6 +39,42 @@ enum TestHooks {
         }
         static var imagesLoaded: Int { loadedImages }
         static var lastDownloadSHA: String { lastDownload }
+
+        /// `TT_TEST_SCAN=marker`: how many files in the app's data directory hold these bytes (TC-RCL-03-04: the recalled
+        /// text is gone from the local database after a cold start). A count, never content.
+        static func scanHits() -> Int {
+            guard let needle = env["TT_TEST_SCAN"].map({ Data($0.utf8) }), !needle.isEmpty else { return -1 }
+            let fm = FileManager.default
+            let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+            guard let e = fm.enumerator(at: home, includingPropertiesForKeys: [.isRegularFileKey]) else { return 0 }
+            var n = 0
+            for case let u as URL in e where (try? u.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+                if let d = try? Data(contentsOf: u, options: .mappedIfSafe), d.range(of: needle) != nil { n += 1 }
+            }
+            return n
+        }
+
+        /// Files in the SDK's download cache, the SDK's partial `.part-` files, and URLSession's own `CFNetworkDownload_*`
+        /// files in tmp (AC-RCL-03-12 "不留部分文件", issue 52). Counts only.
+        static func downloadCache() -> (files: Int, parts: Int, urlSession: Int) {
+            let fm = FileManager.default
+            var files = 0
+            var parts = 0
+            var urlSession = 0
+            if let root = fm.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("tianting-files"),
+                let e = fm.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey])
+            {
+                for case let u as URL in e where (try? u.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+                    files += 1
+                    if u.lastPathComponent.contains(".part-") { parts += 1 }
+                }
+            }
+            let tmp = fm.temporaryDirectory
+            for n in (try? fm.contentsOfDirectory(atPath: tmp.path)) ?? [] where n.hasPrefix("CFNetworkDownload") {
+                urlSession += 1
+            }
+            return (files, parts, urlSession)
+        }
     #else
         static var pickDir: URL? { nil }
         static func imageLoaded() {}

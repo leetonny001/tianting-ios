@@ -17,7 +17,8 @@ tt_server_dir() {
 tt_server_start() {
   local dir port admin_port
   dir="$(tt_server_dir)" || return 1
-  TT_E2E_DIR="$(mktemp -d)"
+  # TT_E2E_TMP: where the server binary, database and logs go (default the system temporary directory).
+  TT_E2E_DIR="$(mktemp -d "${TT_E2E_TMP:-${TMPDIR:-/tmp}}/tt-e2e.XXXXXX")"
   (cd "$dir" && go build -o "$TT_E2E_DIR/im-server" ./cmd/im-server) || return 1
   port="${TT_E2E_PORT:-18180}"
   admin_port="${TT_E2E_ADMIN_PORT:-18181}"
@@ -28,7 +29,8 @@ tt_server_start() {
       return 1
     fi
   done
-  # Images and files (C2): the fake S3 (scripts/fake_s3.py, 127.0.0.1 only; the simulator shares the Mac's network, so the
+  # Recall, quote and @ (C4): IM_MSG_ACTIONS_ENABLED=1 (needs IM_QUARANTINE_KEY, set below); /v1/config then says
+  # features.msgActions=true. Images and files (C2): the fake S3 (scripts/fake_s3.py, 127.0.0.1 only; the simulator shares the Mac's network, so the
   # presigned http://127.0.0.1 addresses work as they are, NSAllowsLocalNetworking). Its credentials are fake values it does
   # not check, not real keys.
   python3 -I "$TT_REPO/scripts/fake_s3.py" --port "$s3_port" > "$TT_E2E_DIR/s3.log" 2>&1 &
@@ -49,6 +51,7 @@ JSON
   )
   IM_ADDR="127.0.0.1:$port" IM_ADMIN_ADDR="127.0.0.1:$admin_port" IM_METRICS_ADDR=off \
     IM_DB="$TT_E2E_DIR/im.db" IM_TEST_MODE=1 IM_DEMO_LOGIN=1 IM_V13_ADMIN_FEATURES=1 IM_PUSH_ENABLED=1 \
+    IM_MSG_ACTIONS_ENABLED="${IM_MSG_ACTIONS_ENABLED:-1}" \
     IM_REGISTER_MODE=invite IM_REFRESH_KEYS="e2e:$(openssl rand -hex 24)" IM_TEST_DISABLE_AUTH_LOCK=1 \
     IM_ADMIN_KEY="$TT_E2E_ADMIN_KEY" IM_JWT_SECRET="$(openssl rand -hex 24)" \
     IM_QUARANTINE_KEY="$(openssl rand -hex 24)" IM_ADMIN_CALLERS="$callers" \

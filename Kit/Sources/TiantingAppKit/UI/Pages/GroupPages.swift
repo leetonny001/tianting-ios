@@ -34,13 +34,16 @@ final class GroupInfoModel {
 }
 
 /// Group members in pages (F-UI-38 rule 1): load more dedupes by userId; reload refetches up to the count held, so the
-/// list does not snap back to the first page, and a newer reload drops older results.
+/// list does not snap back to the first page, and a newer reload drops older results. With a `keyword` (the @ picker,
+/// PRD-chat F-MEN-01 rule 6) pages come from `searchGroupMembers`; `failed` is the picker's "加载失败".
 @MainActor
 @Observable
 final class GroupMembersModel {
     private(set) var members: [GroupMemberInfo] = []
     private(set) var loaded = false
     private(set) var hasMore = false
+    private(set) var failed = false
+    private(set) var keyword = ""
     private var cursor = ""
     private var generation = 0
     private var busy = false
@@ -62,6 +65,22 @@ final class GroupMembersModel {
         members = list
         hasMore = !next.isEmpty
         loaded = true
+        failed = false
+    }
+
+    private func fetch(_ cursor: String?) async throws -> TiantingIM.GroupMembersPage {
+        if keyword.isEmpty { return try await store.client.loadGroupMembers(groupId, cursor: cursor) }
+        return try await store.client.searchGroupMembers(groupId, keyword: keyword, cursor: cursor)
+    }
+
+    /// A new search from its first page (an empty keyword lists everyone). 4290 is not retried (F-MEN-01 rule 6).
+    func search(_ keyword: String) async {
+        self.keyword = keyword
+        members = []
+        cursor = ""
+        loaded = false
+        failed = false
+        await reload()
     }
 
     func reload() async {
@@ -74,7 +93,7 @@ final class GroupMembersModel {
             var list: [GroupMemberInfo] = []
             var next = ""
             repeat {
-                let page = try await store.client.loadGroupMembers(groupId, cursor: next.isEmpty ? nil : next)
+                let page = try await fetch(next.isEmpty ? nil : next)
                 if mine != generation { return }
                 list = merged(list, page.members)
                 next = page.nextCursor
@@ -82,6 +101,7 @@ final class GroupMembersModel {
             publish(list, next)
         } catch {
             // Keep the list; the next groupChanged or reconnect reloads.
+            if mine == generation, !loaded { failed = true }
         }
     }
 
@@ -91,7 +111,7 @@ final class GroupMembersModel {
         busy = true
         defer { if mine == generation { busy = false } }
         do {
-            let page = try await store.client.loadGroupMembers(groupId, cursor: cursor)
+            let page = try await fetch(cursor)
             if mine != generation { return }
             publish(merged(members, page.members), page.nextCursor)
         } catch {

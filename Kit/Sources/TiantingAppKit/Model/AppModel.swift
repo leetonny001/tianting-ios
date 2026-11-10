@@ -135,6 +135,13 @@ public final class AppModel {
         return cachedConfig?.files == true
     }
 
+    /// `features.msgActions` (PRD-ui F-UI-09 rule 4, `IM_MSG_ACTIONS_ENABLED`): "引用", "撤回" and @ only when on; a server
+    /// without the field reads as off (issue 36).
+    public var msgActionsEnabled: Bool {
+        if case .loaded(let c) = loginConfig { return c.features.msgActions == true }
+        return cachedConfig?.msgActions == true
+    }
+
     private static func liveAccount(_ config: AppConfig, _ sessions: AccountSessionStore) -> AccountClient {
         var options = AccountClientOptions(baseUrl: config.apiBase)
         options.platform = .ios
@@ -203,6 +210,11 @@ public final class AppModel {
         let store = IMStore(client: client, me: s.userId)
         let media = MediaOps(client: client, files: files)
         store.onFilesExpired = { [weak media] ids in media?.forget(ids) }
+        // A file download stopped by a recall: "该消息已被撤回"; a deletion or expiry says nothing more, the bubble changes
+        // itself (issue 46). The SDK removed the partial file.
+        store.onDownloadAborted = { [weak self, weak media] fileId, recalled in
+            if media?.downloadAborted(fileId) == true, recalled { self?.hub.show(messageRecalledText) }
+        }
         self.media = media
         store.onFatal = { [weak self] reason in self?.stop(reason) }
         store.onSendFailed = { [weak self] _, _, error in

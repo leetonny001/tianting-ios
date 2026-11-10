@@ -160,11 +160,14 @@ public func privacyURL(_ raw: String?) -> URL? {
 /// What is kept of `GET /v1/config` for a logged-in user whose next request fails (F-ACC-07 rule 4). No secrets in it.
 public struct CachedConfig: Codable, Equatable, Sendable {
     public var files: Bool
+    /// `features.msgActions` (C4); nil from an older server or an older cache: off (issue 36).
+    public var msgActions: Bool?
     public var privacyVersion: String?
     public var privacyURL: String?
 
     public init(_ c: AccountConfig) {
         files = c.features.files
+        msgActions = c.features.msgActions
         privacyVersion = c.privacyNotice?.version
         privacyURL = c.privacyNotice?.url
     }

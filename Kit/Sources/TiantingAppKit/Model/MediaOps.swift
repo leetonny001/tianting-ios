@@ -217,7 +217,10 @@ public final class MediaOps {
                 TestHooks.downloaded(f)
             } catch {
                 guard let self else { return }
-                if Task.isCancelled || (error as? FileTransferError) == .cancelled {
+                if error is DownloadAbortedError {
+                    // Stopped by the SDK: `downloadAborted` (the event) already cleared the state and told the user.
+                    if case .running = self.downloads[fileId] { self.downloads[fileId] = nil }
+                } else if Task.isCancelled || (error as? FileTransferError) == .cancelled {
                     if self.downloadTasks[fileId] == nil { self.downloads[fileId] = nil }
                 } else {
                     TTLog.event("file.download.failed")
@@ -226,6 +229,16 @@ public final class MediaOps {
             }
             self?.downloadTasks[fileId] = nil
         }
+    }
+
+    /// The SDK stopped this file's download (recalled, deleted or expired; AC-RCL-03-12): no "下载失败", the state goes.
+    /// Returns whether a file bubble's download was running (thumbnails and originals for the viewer do not count).
+    @discardableResult
+    public func downloadAborted(_ fileId: String) -> Bool {
+        guard case .running = downloads[fileId] else { return false }
+        downloadTasks.removeValue(forKey: fileId)?.cancel()
+        downloads[fileId] = nil
+        return true
     }
 
     public func cancelDownload(_ fileId: String) {

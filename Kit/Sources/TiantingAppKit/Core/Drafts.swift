@@ -1,23 +1,30 @@
 import Foundation
 import Observation
 
-/// Drafts (PRD-ui F-UI-24): memory only, one instance per login, by conversation.
+/// Drafts (PRD-ui F-UI-24): memory only, one instance per login, by conversation. Structured since C4: text, @ ranges and
+/// the quoted msgId (PRD-chat F-MEN-01 rule 5, AC-MEN-01-10; still memory only, issue 15).
 @MainActor
 @Observable
 public final class DraftStore {
-    public private(set) var drafts: [String: String] = [:]
+    public private(set) var drafts: [String: Draft] = [:]
 
     public init() {}
 
-    public func draft(_ convId: String) -> String? { drafts[convId] }
+    public func draft(_ convId: String) -> Draft? { drafts[convId] }
 
-    /// Whitespace-only text removes the draft.
+    /// The list's "[草稿]" text: nil when there is no draft or only a quote without text.
+    public func text(_ convId: String) -> String? {
+        guard let d = drafts[convId], !d.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return d.text
+    }
+
+    /// Whitespace-only text without a quote removes the draft.
+    public func put(_ convId: String, _ draft: Draft) {
+        drafts[convId] = draft.isEmpty ? nil : draft
+    }
+
     public func put(_ convId: String, _ text: String) {
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            drafts[convId] = nil
-        } else {
-            drafts[convId] = text
-        }
+        put(convId, Draft(text: text))
     }
 
     public func remove(_ convId: String) {
