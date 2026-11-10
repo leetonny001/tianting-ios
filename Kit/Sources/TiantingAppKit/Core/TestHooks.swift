@@ -55,7 +55,8 @@ enum TestHooks {
         }
 
         /// Files in the SDK's download cache, the SDK's partial `.part-` files, and URLSession's own `CFNetworkDownload_*`
-        /// files in tmp (AC-RCL-03-12 "不留部分文件", issue 52). Counts only.
+        /// files in tmp (AC-RCL-03-12 "不留部分文件"; issue 52: the SDK no longer uses download tasks, so this stays 0).
+        /// Counts only.
         static func downloadCache() -> (files: Int, parts: Int, urlSession: Int) {
             let fm = FileManager.default
             var files = 0

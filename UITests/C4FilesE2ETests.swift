@@ -60,11 +60,9 @@ final class C4FilesE2ETests: FilesCase {
             }
             try await sleep(200)
         }
-        // URLSession's own temporary file of the cancelled transfer stays behind (sdk-swift, frontend-chat issue 52).
+        // No temporary file of URLSession's own either: sdk-swift streams into its `.part-` (frontend-chat issue 52).
         try await sleep(2000)
-        XCTExpectFailure("issue 52: URLSession leaves CFNetworkDownload_*.tmp after the SDK cancels", strict: false) {
-            XCTAssertEqual(probeInt("cfdl"), urlSessionBefore, "URLSession temporary file")
-        }
+        XCTAssertEqual(probeInt("cfdl"), urlSessionBefore, "URLSession temporary file")
         XCTAssertFalse(el("file-download-failed").exists)
         try await staysGone(el("file-download-failed"))
     }
