@@ -52,8 +52,9 @@ def main():
             if any(m in line for m in ["ZXQ-", "很长的消息内容", "收到，周六见", "你好bob"]):
                 ax_hits += 1
             continue
-        # CFNetwork logs a cancelled task's whole presigned URL, whose response-content-disposition carries the file name
-        # (seen with C4: a download stopped by a recall, TC-RCL-03-12). System logging like issue I11: counted, reported.
+        # CFNetwork logs a cancelled task's whole presigned URL (seen with C4: a download stopped by a recall,
+        # TC-RCL-03-12). Since PRD-chat v1.7 (P-45, frontend-chat issue 51) the SDK asks for bareDisposition, so the URL
+        # carries no file name: a line with one fails the check.
         if "[com.apple.CFNetwork:" in line and "X-Amz-Signature" in line:
             if "ZXQ-" in line:
                 cfn_name_hits += 1
@@ -62,7 +63,9 @@ def main():
             if marker in line:
                 problems.append("os_log contains message text: " + marker)
     print("os_log: %d Accessibility notification-failure lines carry a test marker (system, issue I12)" % ax_hits)
-    print("os_log: %d CFNetwork task-failure lines carry a file name in a presigned URL (system logging, frontend-chat issue 51)" % cfn_name_hits)
+    print("os_log: %d CFNetwork task-failure lines carry a file name in a presigned URL (must be 0, P-45)" % cfn_name_hits)
+    if cfn_name_hits:
+        problems.append("os_log: a CFNetwork line carries a file name in a presigned URL (P-45, frontend-chat issue 51)")
     # AC-FILE-04-11: no presigned signature in the app's logs (file names carry "ZXQ-", checked above). The system's own
     # CFNetwork lines for a cancelled or failed task carry the failing URL with its query (NSErrorFailingURLStringKey);
     # the app cannot turn them off, so they are counted and reported, not failed (issue I11). com.apple.network logs the
