@@ -162,12 +162,15 @@ public struct CachedConfig: Codable, Equatable, Sendable {
     public var files: Bool
     /// `features.msgActions` (C4); nil from an older server or an older cache: off (issue 36).
     public var msgActions: Bool?
+    /// `features.convSettings` (C5); nil from an older server or an older cache: off (P-46 ②).
+    public var convSettings: Bool?
     public var privacyVersion: String?
     public var privacyURL: String?
 
     public init(_ c: AccountConfig) {
         files = c.features.files
         msgActions = c.features.msgActions
+        convSettings = c.features.convSettings
         privacyVersion = c.privacyNotice?.version
         privacyURL = c.privacyNotice?.url
     }

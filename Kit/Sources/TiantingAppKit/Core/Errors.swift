@@ -43,6 +43,8 @@ private let byCode: [Int: String] = [
     4135: "加入的群聊已达上限",
     4136: "管理员最多 10 人",
     4137: "对方回复之前，发送的消息数量已达上限",
+    // Pins are full (C5, PRD-chat F-CVS-01 rule 2).
+    4220: "最多置顶 20 个会话",
     4290: "发送太频繁，请稍后再试",
     4292: "今天的次数已用完，明天再试",
     4293: "@所有人次数已用完",
@@ -56,6 +58,9 @@ private let byCommand: [String: [Int: String]] = [
     "friendRemark": [4040: "对方已不在你的通讯录中"],
     "groupCreate": [4130: "群成员已达上限"],
     "groupInvite": [4130: "群成员已达上限"],
+    // Settings and delete (C5): 4290 is 5 a second per user (F-CVS-04 rule 4), not retried (frontend-chat 56).
+    "convSet": [4290: "操作过于频繁"],
+    "convDelete": [4290: "操作过于频繁"],
 ]
 
 /// Development-time defects: logged, and the UI only says "请求出错" (F-UI-19 rule 5).

@@ -64,14 +64,21 @@ final class Fake {
 
 func convFrame(
     _ convId: String, name: String = "n", maxSeq: Int64 = 0, unread: Int64 = 0, lastMsg: JSONValue = nil,
-    memberCount: Int64? = nil, myRole: String? = nil, allMuted: Bool = false
+    memberCount: Int64? = nil, myRole: String? = nil, allMuted: Bool = false, pinnedAt: Int64? = nil,
+    notifyOff: Bool = false, mentionUnread: Int64? = nil, updatedAt: Int64 = 1
 ) -> JSONValue {
     var o: [String: JSONValue] = [
         "convId": .string(convId),
         "type": .string(convId.hasPrefix("group:") ? "group" : "c2c"),
         "name": .string(name), "maxSeq": .int(maxSeq), "readSeq": .int(maxSeq - unread), "minSeq": 1,
-        "unread": .int(unread), "lastMsg": lastMsg, "updatedAt": 1,
+        "unread": .int(unread), "lastMsg": lastMsg, "updatedAt": .int(updatedAt),
     ]
+    if let pinnedAt {
+        o["pinned"] = true
+        o["pinnedAt"] = .int(pinnedAt)
+    }
+    if notifyOff { o["notifyOff"] = true }
+    if let mentionUnread { o["mentionUnread"] = .int(mentionUnread) }
     if let memberCount { o["memberCount"] = .int(memberCount) }
     if let myRole { o["myRole"] = .string(myRole) }
     if allMuted { o["allMuted"] = true }

@@ -29,6 +29,7 @@ tt_server_start() {
       return 1
     fi
   done
+  # Pin, notifications off and delete (C5): IM_CONV_SETTINGS_ENABLED=1, /v1/config then says features.convSettings=true.
   # Recall, quote and @ (C4): IM_MSG_ACTIONS_ENABLED=1 (needs IM_QUARANTINE_KEY, set below); /v1/config then says
   # features.msgActions=true. Images and files (C2): the fake S3 (scripts/fake_s3.py, 127.0.0.1 only; the simulator shares the Mac's network, so the
   # presigned http://127.0.0.1 addresses work as they are, NSAllowsLocalNetworking). Its credentials are fake values it does
@@ -51,7 +52,7 @@ JSON
   )
   IM_ADDR="127.0.0.1:$port" IM_ADMIN_ADDR="127.0.0.1:$admin_port" IM_METRICS_ADDR=off \
     IM_DB="$TT_E2E_DIR/im.db" IM_TEST_MODE=1 IM_DEMO_LOGIN=1 IM_V13_ADMIN_FEATURES=1 IM_PUSH_ENABLED=1 \
-    IM_MSG_ACTIONS_ENABLED="${IM_MSG_ACTIONS_ENABLED:-1}" \
+    IM_MSG_ACTIONS_ENABLED="${IM_MSG_ACTIONS_ENABLED:-1}" IM_CONV_SETTINGS_ENABLED="${IM_CONV_SETTINGS_ENABLED:-1}" \
     IM_REGISTER_MODE=invite IM_REFRESH_KEYS="e2e:$(openssl rand -hex 24)" IM_TEST_DISABLE_AUTH_LOCK=1 \
     IM_ADMIN_KEY="$TT_E2E_ADMIN_KEY" IM_JWT_SECRET="$(openssl rand -hex 24)" \
     IM_QUARANTINE_KEY="$(openssl rand -hex 24)" IM_ADMIN_CALLERS="$callers" \

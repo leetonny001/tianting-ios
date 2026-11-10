@@ -109,8 +109,11 @@ private struct ConvItem: View {
     private var summary: String {
         conversationSummary(conv, me: store.me) { store.displayName($0) }
     }
-    /// "[有人@我]" over "[草稿]" (F-MEN-03 rule 2); with a mention the last message's summary follows (issue 38).
+    /// One prefix: "[有人@我]" > "[草稿]" > "[N 条]" (F-MEN-03 rule 2, frontend-chat 61); with a mention or "[N 条]" the last
+    /// message's summary follows (issue 38).
     private var prefix: SummaryPrefix { summaryPrefix(conv, hasDraft: draft != nil) }
+    /// The menu's items, by the current state (AC-CVS-01-6); none with features.convSettings off.
+    private var menu: [ConvMenuItem] { convMenuItems(conv, enabled: model.convSettingsEnabled) }
 
     var body: some View {
         Button {
@@ -120,8 +123,10 @@ private struct ConvItem: View {
                 HStack(spacing: TS.s3) {
                     Avatar(id: avatarId, name: name, size: 48, group: isGroup)
                         .overlay(alignment: .topTrailing) {
-                            if conv.unread > 0 {
-                                CountBadge(text: badgeText(Int(conv.unread))).offset(x: 6, y: -6)
+                            switch convBadge(conv) {
+                            case .count(let text): CountBadge(text: text).offset(x: 6, y: -6)
+                            case .dot: UnreadDot().offset(x: 3, y: -3)
+                            case .none: EmptyView()
                             }
                         }
                     VStack(alignment: .leading, spacing: TS.s1) {
@@ -138,7 +143,14 @@ private struct ConvItem: View {
                                 }
                             }
                         }
-                        summaryLine
+                        HStack(spacing: TS.s1) {
+                            summaryLine
+                            Spacer(minLength: 0)
+                            if conv.isNotifyOff {
+                                // PRD-ui 6.6 `bell-off`, text.tertiary; the row reads "免打扰" (AC-CVS-02-3).
+                                Icon(name: .notifyOff, size: 16).foregroundStyle(TC.textTertiary)
+                            }
+                        }
                     }
                 }
                 .padding(.horizontal, TS.s4)
@@ -146,14 +158,32 @@ private struct ConvItem: View {
                 .frame(maxWidth: .infinity, minHeight: Tokens.Size.convItem - 1, alignment: .leading)
                 TC.divider.frame(height: 1).padding(.leading, 76)
             }
-            .background(TC.surface)
+            // Pinned rows stand apart (F-CVS-01, PRD-ui 6.1 `surface.pinned`, dark mode too).
+            .background(conv.isPinned ? TC.surfacePinned : TC.surface)
             .contentShape(Rectangle())
         }
         .buttonStyle(RowPressStyle())
+        .contextMenu {
+            // Long press (AC-CVS-01-6); the same items are VoiceOver actions below (13.4).
+            ForEach(menu, id: \.action) { item in
+                Button(role: item.action == .delete ? .destructive : nil) {
+                    act(item.action)
+                } label: {
+                    Text(item.title)
+                }
+                .accessibilityIdentifier("conv-menu-\(item.action.rawValue)")
+            }
+        }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityText)
+        .accessibilityLabel(
+            convRowAccessibilityText(name: name, conv: conv, prefix: prefix, summary: summary, draft: draft))
         .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("conv-item")
+        .accessibilityActions {
+            ForEach(menu, id: \.action) { item in
+                Button(item.title) { act(item.action) }
+            }
+        }
         .task(id: conv.lastMsg?.from) {
             var ids: [String] = []
             if let from = conv.lastMsg?.from, isGroup, !from.isEmpty { ids.append(from) }
@@ -162,37 +192,49 @@ private struct ConvItem: View {
         }
     }
 
+    private func act(_ action: ConvMenuAction) {
+        let conv = conv
+        switch action {
+        case .pin: Task { await model.toggleConvPinned(conv) }
+        case .notify: Task { await model.toggleConvNotifyOff(conv) }
+        case .delete: model.askDeleteConv(conv.convId)
+        }
+    }
+
     @ViewBuilder private var summaryLine: some View {
-        if prefix == .mention {
+        switch prefix {
+        case .mention:
             // The same danger color as "[草稿]" (issue 38).
             HStack(spacing: TS.s1) {
                 Text("[有人@我]").foregroundStyle(TC.danger).fixedSize()
                 Text(summary).foregroundStyle(TC.textSecondary).lineLimit(1)
             }
             .font(TTFont.small)
-        } else if prefix == .draft, let draft {
+        case .draft:
             HStack(spacing: TS.s1) {
                 Text("[草稿]").foregroundStyle(TC.danger).fixedSize()
-                Text(draft).foregroundStyle(TC.textSecondary).lineLimit(1)
+                Text(draft ?? "").foregroundStyle(TC.textSecondary).lineLimit(1)
             }
             .font(TTFont.small)
-        } else if conv.lastMsg != nil {
-            Text(summary).font(TTFont.small).foregroundStyle(TC.textSecondary).lineLimit(1)
+        case .unread(let n):
+            // Notifications off (F-CVS-02 rule 5): the count is here, not at the avatar; N as it is (frontend-chat 61).
+            HStack(spacing: TS.s1) {
+                Text(verbatim: unreadPrefixText(n)).foregroundStyle(TC.textSecondary).fixedSize()
+                if conv.lastMsg != nil { Text(summary).foregroundStyle(TC.textSecondary).lineLimit(1) }
+            }
+            .font(TTFont.small)
+        case .none:
+            if conv.lastMsg != nil {
+                Text(summary).font(TTFont.small).foregroundStyle(TC.textSecondary).lineLimit(1)
+            }
         }
     }
+}
 
-    /// The whole row reads as one element: name, summary or draft, and unread.
-    private var accessibilityText: String {
-        var parts = [name]
-        if prefix == .mention {
-            parts.append("[有人@我] \(summary)")
-        } else if prefix == .draft, let draft {
-            parts.append("[草稿] \(draft)")
-        } else if conv.lastMsg != nil {
-            parts.append(summary)
-        }
-        if conv.unread > 0 { parts.append("未读 \(badgeText(Int(conv.unread)))") }
-        return parts.joined(separator: "，")
+/// The unread mark of a conversation with notifications off: `badge.bg`, no number (PRD-ui F-UI-04 rule 4).
+private struct UnreadDot: View {
+    var body: some View {
+        Circle().fill(TC.badgeBg).frame(width: 10, height: 10)
     }
 }
 

@@ -67,7 +67,9 @@ private struct ChatContent: View {
     private var unknown: Bool { conv == nil && snapshot == nil && messages.isEmpty }
     private var block: ChatBlock? { chatBlock(snapshot: snapshot, probe: probe) }
     /// Group not in the list and no snapshot: ask the server first; until then neither input nor "not in group" (G-UI-26).
-    private var probing: Bool { isGroup && unknown && probe != .notMember && probe != .notFound }
+    private var probing: Bool { isGroup && unknown && probe != .done && probe != .notMember && probe != .notFound }
+    /// A group not in the list: its name from `getGroupInfo` once the probe let us in (frontend-chat 66).
+    @State private var probedName: String?
     /// Quote, recall and @ (C4): only with features.msgActions (PRD-ui F-UI-09 rule 4).
     private var actionsOn: Bool { model.msgActionsEnabled }
     /// @ opens the picker only in a group with the switch on (AC-MEN-01-6).
@@ -118,6 +120,13 @@ private struct ChatContent: View {
         .onDisappear {
             store.clearActive(convId)
             if block == nil { model.drafts.put(convId, Draft(text: edit.text, mentions: edit.ranges, quote: quoteId)) }
+        }
+        .onChange(of: store.deletedTicks[convId]) { _, _ in
+            // Deleted on another device while open: the input empties too (frontend-chat 55); the SDK purged the rows.
+            edit = .empty
+            quoteId = nil
+            pickerAt = nil
+            model.drafts.remove(convId)
         }
         .onChange(of: block) { _, next in
             // F-UI-33 rule 5: what was typed is not kept.
@@ -352,7 +361,7 @@ private struct ChatContent: View {
         }
         if let name = conv?.name ?? snapshot?.name { return name }
         if isGroup {
-            return probe == .notMember || probe == .notFound ? "群聊" : to
+            return probe == .notMember || probe == .notFound ? "群聊" : (probedName ?? to)
         }
         return to
     }
@@ -641,7 +650,10 @@ private struct ChatContent: View {
         probe = .loading
         do {
             _ = try await store.client.loadHistory(convId)
-            probe = .idle
+            probe = .done
+            if isGroup, store.client.messages(convId).isEmpty, let info = try? await store.client.getGroupInfo(to) {
+                probedName = info.name
+            }
         } catch {
             switch (error as? IMError)?.code {
             case 4033: probe = .notMember

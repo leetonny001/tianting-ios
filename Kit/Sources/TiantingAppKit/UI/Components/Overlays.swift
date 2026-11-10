@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 import TiantingIM
 
 /// The connection bar (F-UI-17, F-CONN-02): shown by the SDK's `banner` event after its delay; pushes content down.
@@ -195,7 +196,10 @@ struct TestStateProbe: View {
                             if tick % 10 == 0 { scan = TestHooks.scanHits() }  // Reads every file: once a second.
                             tick += 1
                             let cache = TestHooks.downloadCache()
-                            value = "session=\(store.isEmpty ? 0 : 1) pending=\(store.pendingCount) class=\(store.accessibleClass) att=\(AppModel.attachmentFileCount()) img=\(TestHooks.imagesLoaded) dl=\(TestHooks.lastDownloadSHA) saves=\(TestHooks.saveCount) scan=\(scan) cache=\(cache.files) part=\(cache.parts) cfdl=\(cache.urlSession)"
+                            // AC-CVS-02-6: system notifications shown or waiting (counts only).
+                            let center = UNUserNotificationCenter.current()
+                            let notes = await center.deliveredNotifications().count + center.pendingNotificationRequests().count
+                            value = "session=\(store.isEmpty ? 0 : 1) pending=\(store.pendingCount) class=\(store.accessibleClass) att=\(AppModel.attachmentFileCount()) img=\(TestHooks.imagesLoaded) dl=\(TestHooks.lastDownloadSHA) saves=\(TestHooks.saveCount) scan=\(scan) cache=\(cache.files) part=\(cache.parts) cfdl=\(cache.urlSession) notes=\(notes) alerts=\(TestHooks.alertCount)"
                         #endif
                         try? await Task.sleep(for: .milliseconds(100))
                     }

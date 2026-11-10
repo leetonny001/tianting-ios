@@ -20,6 +20,10 @@ PAIRS = [
     ("19", "danger", "surface", 4.5), ("20", "danger", "chat.bg", 3), ("21", "on.badge", "badge.bg", 4.5),
     ("22", "warning.text", "warning.bg", 4.5), ("23", "border.input", "surface", 3), ("24", "text.tertiary", "chat.bg", 3),
     ("25", "border.input", "bg", 3), ("26", "danger", "bg", 4.5),
+    # v1.5 (C5): the pinned conversation background; 31 is the notify-off dot, not text (3:1).
+    ("27", "text.primary", "surface.pinned", 4.5), ("28", "text.secondary", "surface.pinned", 4.5),
+    ("29", "text.tertiary", "surface.pinned", 4.5), ("30", "danger", "surface.pinned", 4.5),
+    ("31", "badge.bg", "surface.pinned", 3),
 ]
 
 

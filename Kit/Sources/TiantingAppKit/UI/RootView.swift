@@ -199,6 +199,8 @@ private struct TabBar: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            // "消息，5 条未读": the visible count is part of the name (frontend-chat 67).
+            .accessibilityLabel(tabAccessibilityLabel(label, tab, badge: badge))
             .accessibilityIdentifier("tab-\(tab.rawValue)")
             .accessibilityAddTraits(selected ? .isSelected : [])
             if badge > 0 {

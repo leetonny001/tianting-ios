@@ -4,6 +4,7 @@
 - no color literal outside Theme/Tokens.swift (AC-UI-22-3): Color(red:..), UIColor(red:..), #colorLiteral, Color(hex..), hex strings
 - UserDefaults only in Core/UIPrefs.swift (AC-UI-90-2), Keychain APIs only in Core/SessionStore.swift
 - no print / NSLog / os_log / dump outside Core/Logging.swift (AC-UI-90-12)
+- no sound, vibration or local-notification API outside Core/Alerts.swift (AC-CVS-02-6)
 - no http:// in app sources (AC-UI-21-5), except the loopback defaults of the debug config, which live in plists
 - no Text("...\\(x)..."): a localized key renders numbers with grouping ("1,000")
 - no other product's name (AC-UI-90-15)
@@ -23,6 +24,12 @@ COLOR = re.compile(
     r"#colorLiteral|\bColor\(\s*(red|white|hue|\.sRGB|hex|\")|\bUIColor\(\s*(red|white|hue|displayP3|hex)|"
     r"\bCGColor\(|\.(red|blue|green|black|white|gray|orange|yellow|pink|purple)\b(?=\s*[,)])|Color\.(red|blue|green|black|white|gray)\b|"
     r"\"#[0-9a-fA-F]{6,8}\"|0x[0-9a-fA-F]{6}\b"
+)
+# Sounds, vibration and posting local notifications only in Core/Alerts.swift (AC-CVS-02-6: the UI tests' stand-in counts
+# its calls, so nothing may ring around it).
+ALERTS = re.compile(
+    r"\b(AudioServicesPlay\w*|SystemSoundID|AVAudioPlayer|AVAudioEngine|AVPlayer|\w*FeedbackGenerator|UNNotificationRequest|"
+    r"UNMutableNotificationContent)\b|\.sensoryFeedback\("
 )
 LOGGING = re.compile(r"\b(print|debugPrint|NSLog|os_log|dump)\(")
 BANNED = re.compile("|".join(["微" + "信", "we" + "chat", "wei" + "xin"]), re.I)
@@ -50,6 +57,8 @@ def main():
                 problems.append("%s:%d: UserDefaults outside UIPrefs: %s" % (rel, i, line.strip()))
             if re.search(r"\bSec(Item|Key)", code) and not rel.endswith("SessionStore.swift"):
                 problems.append("%s:%d: Keychain outside SessionStore" % (rel, i))
+            if ALERTS.search(code) and not rel.endswith(os.path.join("Core", "Alerts.swift")):
+                problems.append("%s:%d: sound, vibration or notification outside Alerts: %s" % (rel, i, line.strip()))
             if LOGGING.search(code) and not rel.endswith("Logging.swift"):
                 problems.append("%s:%d: logging outside TTLog: %s" % (rel, i, line.strip()))
             if re.search(r'\bText\("[^"]*\\\(', code):

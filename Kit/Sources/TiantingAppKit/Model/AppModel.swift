@@ -52,6 +52,8 @@ public final class AppModel {
     public private(set) var pendingDestination: Destination?
     /// Network reachability: "网络不可用" vs "连接中…" (F-CONN-02).
     public private(set) var online = true
+    /// The conversation whose delete confirmation is open (closed when another device deletes it first).
+    @ObservationIgnored var deletingConv: String?
 
     public let config: AppConfig
     public let hub = UIHub()
@@ -142,6 +144,13 @@ public final class AppModel {
         return cachedConfig?.msgActions == true
     }
 
+    /// `features.convSettings` (PRD-chat F-CVS-01 rule 1, `IM_CONV_SETTINGS_ENABLED`): the conversation menu only when on; a
+    /// server without the field reads as off. Pins and notifications off already set still show (P-46 ②).
+    public var convSettingsEnabled: Bool {
+        if case .loaded(let c) = loginConfig { return c.features.convSettings == true }
+        return cachedConfig?.convSettings == true
+    }
+
     private static func liveAccount(_ config: AppConfig, _ sessions: AccountSessionStore) -> AccountClient {
         var options = AccountClientOptions(baseUrl: config.apiBase)
         options.platform = .ios
@@ -217,6 +226,9 @@ public final class AppModel {
         }
         self.media = media
         store.onFatal = { [weak self] reason in self?.stop(reason) }
+        // Deleted here or on another device of mine: the draft goes on every device (F-CVS-03 rule 7, frontend-chat 55);
+        // the SDK already purged messages, failed and queued ones, uploads and cached files.
+        store.onConvDeleted = { [weak self] convId in self?.convDeleted(convId) }
         store.onSendFailed = { [weak self] _, _, error in
             // 4035 / 4036 / 4137 insert a tip in the chat page (F-UI-31), 4031 has the bar (F-UI-41 rule 5);
             // timeouts and kicks show nothing (F-UI-08 rule 3).

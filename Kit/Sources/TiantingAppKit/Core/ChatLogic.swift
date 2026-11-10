@@ -22,8 +22,10 @@ public func removedBlock(reason: String?) -> ChatBlock {
     }
 }
 
+/// `done`: the server let us in (still a member) but there is no message, e.g. a group whose conversation I deleted
+/// (PRD-chat F-CVS-03 rule 4): an empty chat page, not "加载中…" for ever (frontend-chat 66).
 public enum ChatProbe: Equatable, Sendable {
-    case idle, loading, notMember, notFound
+    case idle, loading, done, notMember, notFound
 }
 
 public func chatBlock(snapshot: ConversationSnapshot?, probe: ChatProbe) -> ChatBlock? {
@@ -185,15 +187,19 @@ public func jumpPlan(_ seq: Int64?, loaded: [Int64], limit: Int64) -> JumpPlan {
     return .load(Int(min(quoteJumpMax, gap)))
 }
 
-/// The list's summary prefix (F-MEN-03 rule 2, R-CF-20): "[有人@我]" over "[草稿]" ("[N 条]" comes with C5). With a mention
-/// the last message's summary follows, not the draft (issue 38).
+/// The list's summary prefix, one at most (F-MEN-03 rule 2, PRD-ui F-UI-04 rule 5, frontend-chat 61): "[有人@我]" over
+/// "[草稿]" over "[N 条]". With a mention the last message's summary follows, not the draft (issue 38); "[N 条]" is a
+/// conversation with notifications off that has unread messages (PRD-chat F-CVS-02 rule 5), the summary follows too.
 public enum SummaryPrefix: Equatable, Sendable {
     case mention, draft, none
+    case unread(Int64)
 }
 
 public func summaryPrefix(_ conv: Conversation, hasDraft: Bool) -> SummaryPrefix {
     if (conv.mentionUnread ?? 0) > 0 { return .mention }
-    return hasDraft ? .draft : .none
+    if hasDraft { return .draft }
+    if conv.isNotifyOff, conv.unread > 0 { return .unread(conv.unread) }
+    return .none
 }
 
 /// The quote bar above the input (F-QUO-01, F-QUO-02 rule 3, 13.4 "引用条"): the loaded message, following its recall or

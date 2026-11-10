@@ -38,6 +38,10 @@ enum TestHooks {
             lastDownload = SHA256.hash(data: d).map { String(format: "%02x", $0) }.joined()
         }
         static var imagesLoaded: Int { loadedImages }
+        private nonisolated(unsafe) static var alerts = 0
+        /// Calls of `Alerts.ring` (AC-CVS-02-6: none for a conversation with notifications off). A count.
+        static func alerted() { alerts += 1 }
+        static var alertCount: Int { alerts }
         static var lastDownloadSHA: String { lastDownload }
 
         /// `TT_TEST_SCAN=marker`: how many files in the app's data directory hold these bytes (TC-RCL-03-04: the recalled
@@ -81,6 +85,7 @@ enum TestHooks {
         static func imageLoaded() {}
         static func downloaded(_ url: URL) {}
         static func savedSession() {}
+        static func alerted() {}
         static var forceOffline: Bool { false }
         static var copyFails: Bool { false }
         static var exposesState: Bool { false }

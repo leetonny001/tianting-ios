@@ -20,6 +20,7 @@ public enum Tokens {
         public nonisolated static let bg = adaptive(ui(242, 243, 247, 1.000), ui(17, 19, 24, 1.000))
         public nonisolated static let surface = adaptive(ui(255, 255, 255, 1.000), ui(27, 30, 37, 1.000))
         public nonisolated static let surfaceSelected = adaptive(ui(232, 235, 250, 1.000), ui(42, 47, 69, 1.000))
+        public nonisolated static let surfacePinned = adaptive(ui(243, 244, 248, 1.000), ui(35, 38, 46, 1.000))
         public nonisolated static let chatBg = adaptive(ui(238, 240, 250, 1.000), ui(13, 15, 19, 1.000))
         public nonisolated static let bubbleSelfBg = adaptive(ui(76, 95, 213, 1.000), ui(67, 82, 196, 1.000))
         public nonisolated static let bubbleSelfText = adaptive(ui(255, 255, 255, 1.000), ui(255, 255, 255, 1.000))

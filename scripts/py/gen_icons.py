@@ -33,6 +33,8 @@ ICONS = {
     "image": "image",
     "file": "file",
     "close": "x",
+    # The notify-off mark in the conversation list (C5, PRD-ui 6.6 v1.5).
+    "notifyOff": "bell-off",
 }
 
 

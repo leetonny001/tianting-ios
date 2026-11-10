@@ -36,11 +36,15 @@ public final class IMStore {
     /// Per group: bumped on `groupChanged`, with the info it brought.
     public private(set) var groupTicks: [String: Int] = [:]
     public private(set) var groupInfos: [String: GroupInfo] = [:]
+    /// Per conversation: bumped when it was deleted here or on another device (`.convDeleted`); an open chat page then
+    /// empties its input (frontend-chat 55).
+    public private(set) var deletedTicks: [String: Int] = [:]
 
     public var onFatal: ((FatalReason) -> Void)?
     public var onSecurityNotice: ((SecurityNotice) -> Void)?
     public var onSendFailed: ((String, String, SendFailure) -> Void)?
     /// Files expired or deleted: decoded images and running downloads go (F-FILE-06 rule 3).
+    public var onConvDeleted: ((String) -> Void)?
     public var onFilesExpired: (([String]) -> Void)?
     /// A running download of a recalled (true), deleted or expired (false) file was stopped (AC-RCL-03-12, issue 33).
     public var onDownloadAborted: ((String, Bool) -> Void)?
@@ -79,6 +83,10 @@ public final class IMStore {
             messageLists[convId] = list
         case .totalUnread(let n):
             totalUnread = n
+        case .convDeleted(let convId):
+            sendTips[convId] = nil  // The failed messages they belonged to are gone.
+            deletedTicks[convId, default: 0] += 1
+            onConvDeleted?(convId)
         case .pendingCount(let n):
             pendingCount = n
         case .sendFailed(let convId, let id, let error):
