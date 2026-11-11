@@ -621,6 +621,12 @@ struct UserPage: View {
             if isFriend {
                 Button("删除朋友") { confirmDelete() }
             }
+            // Reporting a user (F-MOD-03 rule 8): with features.moderation only; this menu is never there for myself
+            // (frontend-chat 76, 77). Success asks about blocking unless already blocked (79).
+            if model.moderationEnabled {
+                Button("举报") { model.presentReport(ReportRequest(target: .user(userId), askBlock: userId)) }
+                    .accessibilityIdentifier("user-report")
+            }
         } label: {
             Icon(name: .more).foregroundStyle(TC.textPrimary)
                 .frame(minWidth: Tokens.Size.touchMin, minHeight: Tokens.Size.touchMin)
@@ -631,9 +637,7 @@ struct UserPage: View {
     }
 
     private func confirmBlock() {
-        model.hub.confirm(
-            id: "block-dialog", text: "加入黑名单后，你将不再收到对方的私聊消息和好友申请；在共同的群聊里仍能看到对方的发言", ok: "确定"
-        ) {
+        model.hub.confirm(id: "block-dialog", text: blockExplainText, ok: "确定") {
             run("block") { try await store.client.block(userId) }
         }
     }

@@ -164,6 +164,8 @@ public struct CachedConfig: Codable, Equatable, Sendable {
     public var msgActions: Bool?
     /// `features.convSettings` (C5); nil from an older server or an older cache: off (P-46 ②).
     public var convSettings: Bool?
+    /// `features.moderation` (C6); nil from an older server or an older cache: off (frontend-chat 76).
+    public var moderation: Bool?
     public var privacyVersion: String?
     public var privacyURL: String?
 
@@ -171,6 +173,7 @@ public struct CachedConfig: Codable, Equatable, Sendable {
         files = c.features.files
         msgActions = c.features.msgActions
         convSettings = c.features.convSettings
+        moderation = c.features.moderation
         privacyVersion = c.privacyNotice?.version
         privacyURL = c.privacyNotice?.url
     }

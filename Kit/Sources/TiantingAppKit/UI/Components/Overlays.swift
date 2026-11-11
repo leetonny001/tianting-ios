@@ -41,7 +41,7 @@ struct DialogLayer: View {
                     .accessibilityLabel("关闭")
                     .accessibilityAddTraits(.isButton)
                     .onTapGesture {
-                        if dialog.dismissible { model.hub.dismissDialog() }
+                        if dialog.dismissible, !model.hub.dialogLocked { model.hub.dismissDialog() }
                     }
                 ScrollView {
                     dialog.content

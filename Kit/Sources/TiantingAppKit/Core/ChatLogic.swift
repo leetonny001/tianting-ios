@@ -119,15 +119,16 @@ public func overLimitCount(_ text: String) -> Int {
 
 // MARK: Recall, quote, mentions (C4)
 
-/// The message menu's items (PRD-ui F-UI-09 rules 3-5, PRD-chat 13.3). "举报" comes with C6.
+/// The message menu's items (PRD-ui F-UI-09 rules 3-5, PRD-chat 13.3): "举报" (C6) comes after "撤回".
 public enum MenuAction: String, Sendable, CaseIterable {
-    case copy, quote, recall, retry, delete
+    case copy, quote, recall, report, retry, delete
 
     public var title: String {
         switch self {
         case .copy: return "复制"
         case .quote: return "引用"
         case .recall: return "撤回"
+        case .report: return "举报"
         case .retry: return "重发"
         case .delete: return "删除"
         }
@@ -136,10 +137,12 @@ public enum MenuAction: String, Sendable, CaseIterable {
 
 /// The menu (F-UI-09 rules 3-5): with features.msgActions off only "复制" (text) and a failed message's "重发" "删除"; on,
 /// the SDK's messageActions (copy, quote, recall by `ts` and the corrected server time; none for recalled or deleted
-/// messages and tips). Empty means a long press does nothing. `canRetry` is false when only deleting is left (F-FILE-07
-/// rule 4).
+/// messages and tips). Empty means a long press does nothing. `canRetry` is the SDK's `canRetry`: false for blocked
+/// content (4510, frontend-chat 81: only "复制" "删除") and a missing source (F-FILE-07 rule 4). `canReport` is
+/// features.moderation and the SDK's `canReport` (frontend-chat 76, 77, 88; the page does not judge it), independent of
+/// msgActions.
 public func menuItems(
-    _ m: Message, actionsOn: Bool, canRetry: Bool = true, sdkActions: () -> [MessageAction]
+    _ m: Message, actionsOn: Bool, canRetry: Bool = true, canReport: Bool = false, sdkActions: () -> [MessageAction]
 ) -> [MenuAction] {
     if m.deleted == true || m.type == .tip { return [] }
     var out: [MenuAction] = []
@@ -154,6 +157,7 @@ public func menuItems(
     } else if m.type == .text {
         out.append(.copy)
     }
+    if canReport { out.append(.report) }
     if m.status == .failed {
         if canRetry { out.append(.retry) }
         out.append(.delete)

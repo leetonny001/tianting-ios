@@ -20,6 +20,8 @@ public final class UIHub {
 
     public private(set) var toast: Toast?
     public private(set) var dialog: Dialog?
+    /// The open dialog cannot be dismissed by the scrim for now (the report sheet while it submits, FE-695).
+    public private(set) var dialogLocked = false
     @ObservationIgnored private var counter = 0
     @ObservationIgnored private var hide: Task<Void, Never>?
     @ObservationIgnored public var toastDuration: Duration = .seconds(2)
@@ -45,11 +47,18 @@ public final class UIHub {
     }
 
     func present<V: View>(id: String, dismissible: Bool = true, sheet: Bool = false, @ViewBuilder _ content: () -> V) {
+        dialogLocked = false
         dialog = Dialog(id: id, dismissible: dismissible, sheet: sheet, content: AnyView(content()))
     }
 
     public func dismissDialog() {
+        dialogLocked = false
         dialog = nil
+    }
+
+    /// Locks or unlocks the open dialog against the scrim.
+    public func lockDialog(_ locked: Bool) {
+        dialogLocked = locked
     }
 
     /// A confirm dialog: text, "取消", and an action (F-UI-08, F-UI-14, F-UI-16...).

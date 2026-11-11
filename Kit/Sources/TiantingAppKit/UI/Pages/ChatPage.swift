@@ -74,6 +74,9 @@ private struct ChatContent: View {
     private var actionsOn: Bool { model.msgActionsEnabled }
     /// @ opens the picker only in a group with the switch on (AC-MEN-01-6).
     private var canMention: Bool { isGroup && actionsOn }
+    /// Reporting (C6): features.moderation off means no "举报" in the menu or on recall lines (frontend-chat 76); which
+    /// messages get one is the SDK's `canReport` (77, 88, 89, 92).
+    private var reportOn: Bool { model.moderationEnabled }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -213,6 +216,9 @@ private struct ChatContent: View {
                     hub.show(recallErrorText(error))
                 }
             }
+        case .report:
+            // One message (frontend-chat 85); a c2c one asks about blocking after success, a group one does not (79).
+            if let request = ReportRequest.message(m) { model.presentReport(request) }
         case .retry:
             store.client.retry(convId, m.clientMsgId)  // The menu's "重发" does not ask again (F-UI-09 rule 3).
         case .delete:
@@ -493,6 +499,10 @@ private struct ChatContent: View {
         let list = messages
         let tips = permissionTips(list, tips: store.sendTips[convId])
         let rows = chatRows(list)
+        // Worked out here, while the body is tracked: reading the conversation makes a new readSeq redraw the rows, so
+        // "举报" shows once a message has been read (frontend-chat 92) without reopening the page.
+        _ = conv?.readSeq
+        let reportable = reportOn ? Set(list.filter { store.client.canReport($0) }.map(\.clientMsgId)) : []
         let firstMessageId = list.first?.clientMsgId
         let maxBubble = listWidth * 0.7  // F-UI-07 rule 5
         return ForEach(rows) { row in
@@ -504,7 +514,8 @@ private struct ChatContent: View {
                         .foregroundStyle(TC.textTertiary)
                         .padding(.vertical, TS.s3)
                 case .message(let m):
-                    messageRow(m, tip: tips[m.clientMsgId], maxBubble: maxBubble)
+                    messageRow(
+                        m, tip: tips[m.clientMsgId], maxBubble: maxBubble, reportable: reportable.contains(m.clientMsgId))
                         .modifier(Highlight(on: m.seq != nil && m.seq == highlight))
                         .modifier(TopRowTrigger(active: m.clientMsgId == firstMessageId, onReachTop: reachedTop))
                         .modifier(
@@ -522,11 +533,12 @@ private struct ChatContent: View {
     }
 
     @ViewBuilder
-    private func messageRow(_ m: Message, tip: Int?, maxBubble: CGFloat) -> some View {
+    private func messageRow(_ m: Message, tip: Int?, maxBubble: CGFloat, reportable: Bool) -> some View {
         if m.deleted == true {
             if let notice = recallNotice(convId: convId, message: m, me: store.me) {
                 // The table of F-RCL-02 rule 1a (F-UI-42 rule 4); no menu on recall or deletion lines (F-RCL-03 rule 6).
-                RecallRow(notice: notice)
+                // Someone else's message recalled by someone else, read here: "举报" after the line (F-MOD-03 rule 2a).
+                RecallRow(notice: notice, onReport: reportable ? { act(.report, m) } : nil)
             } else {
                 TipCapsule(text: messageDeletedText).accessibilityIdentifier("msg-deleted")
             }
@@ -541,6 +553,8 @@ private struct ChatContent: View {
                 context: isGroup ? UserContext(source: .group, sourceRef: to) : UserContext(source: .conv),
                 convId: convId,
                 actionsOn: actionsOn,
+                reportOn: reportOn,
+                reportable: reportable,
                 myRole: conv?.myRole,
                 onAction: { act($0, m) },
                 onQuote: { q in Task { await jumpTo(q.seq, limit: quoteJumpMax) } },
@@ -758,20 +772,43 @@ private struct VisibleTrigger: ViewModifier {
 }
 
 /// A recall line (PRD-chat F-RCL-02 rule 1a): the same table as the list summary, names by the local rule (remark first).
-/// No menu (F-RCL-03 rule 6).
+/// No menu (F-RCL-03 rule 6). With `onReport` (C6: someone else's message recalled by someone else and read here, SDK
+/// `canReport`) a "举报" button follows the line (F-MOD-03 rule 2a, AC-MOD-03-11): the line's text and size stay as they
+/// are (`msg-recalled` holds only the recall words), the button's touch area is at least 44 × 44 (frontend-chat 93).
 private struct RecallRow: View {
     let notice: RecallNotice
+    var onReport: (() -> Void)?
     @Environment(IMStore.self) private var store
 
     var body: some View {
-        TipCapsule(text: recallText(notice) { store.displayName($0) })
-            .accessibilityIdentifier("msg-recalled")
-            .task(id: notice) { await store.loadProfiles([notice.operatorId, notice.sender].filter { $0 != store.me }) }
+        let text = recallText(notice) { store.displayName($0) }
+        Group {
+            if let onReport {
+                HStack(spacing: 0) {
+                    TipCapsuleText(text: text).accessibilityIdentifier("msg-recalled")
+                    Button(action: onReport) {
+                        Text("举报")
+                            .font(TTFont.caption)
+                            .foregroundStyle(TC.brand)
+                            .padding(.horizontal, TS.s2)
+                            .frame(minWidth: Tokens.Size.touchMin, minHeight: Tokens.Size.touchMin)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("举报这条消息")
+                    .accessibilityIdentifier("recall-report")
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                TipCapsule(text: text).accessibilityIdentifier("msg-recalled")
+            }
+        }
+        .task(id: notice) { await store.loadProfiles([notice.operatorId, notice.sender].filter { $0 != store.me }) }
     }
 }
 
-/// Centered small text in a capsule: tips and deleted messages (F-UI-40 rule 1, F-UI-42 rule 1). No menu, no avatar.
-private struct TipCapsule: View {
+/// The capsule of `TipCapsule` without its row frame.
+private struct TipCapsuleText: View {
     let text: String
 
     var body: some View {
@@ -782,6 +819,15 @@ private struct TipCapsule: View {
             .padding(.horizontal, TS.s2)
             .padding(.vertical, TS.s1)
             .background(TC.surface, in: RoundedRectangle(cornerRadius: TR.sm))
+    }
+}
+
+/// Centered small text in a capsule: tips and deleted messages (F-UI-40 rule 1, F-UI-42 rule 1). No menu, no avatar.
+private struct TipCapsule: View {
+    let text: String
+
+    var body: some View {
+        TipCapsuleText(text: text)
             .padding(.vertical, TS.s1 + TS.s1)
             .frame(maxWidth: .infinity)
     }
@@ -828,6 +874,10 @@ private struct BubbleRow: View {
     let context: UserContext
     let convId: String
     let actionsOn: Bool
+    /// features.moderation (C6).
+    let reportOn: Bool
+    /// `reportOn` and the SDK's `canReport` when the list was drawn (it follows readSeq, frontend-chat 92).
+    let reportable: Bool
     let myRole: GroupRole?
     let onAction: (MenuAction) -> Void
     let onQuote: (QuoteView) -> Void
@@ -840,7 +890,7 @@ private struct BubbleRow: View {
     /// Whether a long press does anything. The items themselves are worked out when the menu opens (`MessageMenu`):
     /// "撤回" follows the server time then, not when this row was drawn (AC-RCL-01-8).
     private var items: [MenuAction] {
-        menuItems(message, actionsOn: actionsOn, canRetry: !attachmentDeleteOnly(message)) {
+        menuItems(message, actionsOn: actionsOn, canRetry: store.client.canRetry(message), canReport: reportable) {
             store.client.messageActions(message, myRole: myRole)
         }
     }
@@ -910,6 +960,15 @@ private struct BubbleRow: View {
         switch message.status {
         case .sent:
             EmptyView()
+        case .failed where !attachmentDeleteOnly(message) && !store.client.canRetry(message):
+            // Blocked content (4510, SDK canRetry false): no "重发" anywhere (frontend-chat 81). The mark is not a button and
+            // says why (issue 94); the menu has "复制" and "删除".
+            Icon(name: .failed, size: 20)
+                .foregroundStyle(TC.danger)
+                .frame(width: Tokens.Size.touchMin, height: Tokens.Size.touchMin)
+                .accessibilityElement()
+                .accessibilityLabel("发送失败，\(failedReason)")
+                .accessibilityIdentifier("failed-icon")
         case .failed:
             Button {
                 let id = message.clientMsgId
@@ -941,6 +1000,12 @@ private struct BubbleRow: View {
         }
     }
 
+    /// Why a failed message cannot be sent again (the only such case besides a missing source is 4510).
+    private var failedReason: String {
+        if case .code(let code)? = message.error { return errorText(code, cmd: "send") }
+        return contentBlockedSendText
+    }
+
     private var bubbleShape: UnevenRoundedRectangle {
         UnevenRoundedRectangle(
             topLeadingRadius: isSelf ? TR.lg : TR.sm,
@@ -966,8 +1031,8 @@ private struct BubbleRow: View {
         if hasMenu {
             v.contextMenu {
                 MessageMenu(
-                    message: message, convId: convId, actionsOn: actionsOn, myRole: myRole, epoch: recallEpoch,
-                    onAction: onAction)
+                    message: message, convId: convId, actionsOn: actionsOn, reportOn: reportOn, myRole: myRole,
+                    epoch: recallEpoch, onAction: onAction)
             } preview: {
                 // The same bubble; it is on screen only while the menu is open. The preview is hosted on its own and
                 // gets no environment from the row: pass the models (an image bubble reads them).
@@ -1063,6 +1128,7 @@ private struct MessageMenu: View {
     let message: Message
     let convId: String
     let actionsOn: Bool
+    let reportOn: Bool
     let myRole: GroupRole?
     /// The row's recall epoch: a new value makes this menu be built again.
     let epoch: Int
@@ -1071,7 +1137,10 @@ private struct MessageMenu: View {
 
     var body: some View {
         let live = store.client.messages(convId).first { $0.clientMsgId == message.clientMsgId } ?? message
-        let items = menuItems(live, actionsOn: actionsOn, canRetry: !attachmentDeleteOnly(live)) {
+        let items = menuItems(
+            live, actionsOn: actionsOn, canRetry: store.client.canRetry(live),
+            canReport: reportOn && store.client.canReport(live)
+        ) {
             store.client.messageActions(live, myRole: myRole)
         }
         ForEach(items, id: \.self) { a in

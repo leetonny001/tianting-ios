@@ -151,6 +151,15 @@ public final class AppModel {
         return cachedConfig?.convSettings == true
     }
 
+    /// `features.moderation` (PRD-chat F-MOD-03 rule 8, `IM_MOD_ENABLED`): every "举报" entry (message menu, recall line,
+    /// user card, group settings) only when on; a server without the field reads as off. 4510's copy does not depend on it
+    /// (frontend-chat 76).
+    public var moderationEnabled: Bool {
+        if TestHooks.moderationOff { return false }
+        if case .loaded(let c) = loginConfig { return c.features.moderation == true }
+        return cachedConfig?.moderation == true
+    }
+
     private static func liveAccount(_ config: AppConfig, _ sessions: AccountSessionStore) -> AccountClient {
         var options = AccountClientOptions(baseUrl: config.apiBase)
         options.platform = .ios

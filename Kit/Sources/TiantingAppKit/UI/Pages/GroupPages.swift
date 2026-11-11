@@ -292,6 +292,14 @@ private struct GroupSettingsPage: View {
                         }
                     }
                 }
+                // Reporting the group (F-MOD-03 rule 8): this page is only for current members; once out of the group the
+                // read-only page has no entry (frontend-chat 76, 77). No block question after it (79).
+                if model.moderationEnabled {
+                    RowButton(id: "group-report", action: { model.presentReport(ReportRequest(target: .group(info.groupId))) }) {
+                        Text("举报").font(TTFont.body).foregroundStyle(TC.textPrimary)
+                        Spacer()
+                    }
+                }
                 VStack(spacing: 0) {
                     RowButton(id: "group-leave", action: { confirmLeave(can) }) {
                         Text("退出群聊").font(TTFont.body).foregroundStyle(TC.danger)
@@ -373,15 +381,16 @@ private struct GroupSettingsPage: View {
         let hub = model.hub
         hub.present(id: "rename-sheet", sheet: true) {
             RenameDialog(current: group.name) { name in
-                Task {
-                    do {
-                        try await store.client.updateGroup(gid, name: name)
-                        await info.refresh()
-                    } catch {
-                        let code = errorCode(error)
-                        hub.show(errorText(code, cmd: "groupUpdate"))
-                        if code == 4030 { await info.refresh() }
-                    }
+                do {
+                    try await store.client.updateGroup(gid, name: name)
+                    Task { await info.refresh() }
+                    return true
+                } catch {
+                    let code = errorCode(error)
+                    hub.show(errorText(code, cmd: "groupUpdate"))
+                    if code == 4030 { Task { await info.refresh() } }
+                    // A blocked name (4510, P-48 ⑥): "内容包含不当信息，请修改后重试", the sheet and the typed name stay.
+                    return code != 4510
                 }
             }
         }
@@ -420,11 +429,13 @@ private struct GroupSettingsPage: View {
 
 private struct RenameDialog: View {
     let current: String
-    let onSave: (String) -> Void
+    /// Saves; true closes the sheet (false keeps it with the typed name, for 4510).
+    let onSave: (String) async -> Bool
     @Environment(AppModel.self) private var model
     @State private var value: String
+    @State private var saving = false
 
-    init(current: String, onSave: @escaping (String) -> Void) {
+    init(current: String, onSave: @escaping (String) async -> Bool) {
         self.current = current
         self.onSave = onSave
         _value = State(initialValue: current)
@@ -447,13 +458,23 @@ private struct RenameDialog: View {
                 .buttonStyle(TTButtonStyle(kind: .secondary))
                 Button {
                     let name = trimText(value)
-                    model.hub.dismissDialog()
-                    if name != current { onSave(name) }
+                    guard name != current else {
+                        model.hub.dismissDialog()
+                        return
+                    }
+                    guard !saving else { return }
+                    saving = true
+                    let hub = model.hub
+                    Task {
+                        let close = await onSave(name)
+                        saving = false
+                        if close, hub.dialog?.id == "rename-sheet" { hub.dismissDialog() }
+                    }
                 } label: {
                     Text("保存").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(TTButtonStyle())
-                .disabled(tooLong || empty)
+                .disabled(tooLong || empty || saving)
                 .accessibilityIdentifier("rename-save")
             }
         }
@@ -887,7 +908,8 @@ struct GroupNewPage: View {
                     model.hub.dismissDialog()
                     model.replaceTop(with: .chat(result.conv.convId))
                 } catch {
-                    model.hub.dismissDialog()
+                    // A blocked name (4510, P-48 ⑥) keeps the sheet and the typed name; other failures close it.
+                    if errorCode(error) != 4510 { model.hub.dismissDialog() }
                     let e = error as? IMError
                     model.hub.show(
                         memberErrorText(

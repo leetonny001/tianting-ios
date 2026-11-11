@@ -19,6 +19,9 @@ enum TestHooks {
         static var forceOffline: Bool { env["TT_TEST_OFFLINE"] == "1" }
         /// `TT_TEST_COPY_FAIL=1`: the pasteboard refuses the recovery code (F-ACC 13.4).
         static var copyFails: Bool { env["TT_TEST_COPY_FAIL"] == "1" }
+        /// `TT_TEST_MODERATION_OFF=1`: reads `features.moderation` as off, the way an older server or `IM_MOD_ENABLED=0` does
+        /// (frontend-chat 76), while the run's real server has it on.
+        static var moderationOff: Bool { env["TT_TEST_MODERATION_OFF"] == "1" }
         /// `TT_TEST_STATE=1`: a hidden element tells the tests what the Keychain holds: yes or no and a count, no values.
         static var exposesState: Bool { env["TT_TEST_STATE"] == "1" }
         /// `TT_TEST_LEGACY_SESSION=userId:token`: the previous version's Keychain item (TC-ACC-03-18).
@@ -88,6 +91,7 @@ enum TestHooks {
         static func alerted() {}
         static var forceOffline: Bool { false }
         static var copyFails: Bool { false }
+        static var moderationOff: Bool { false }
         static var exposesState: Bool { false }
     #endif
 }

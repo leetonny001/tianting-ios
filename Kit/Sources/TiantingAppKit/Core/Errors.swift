@@ -48,6 +48,9 @@ private let byCode: [Int: String] = [
     4290: "发送太频繁，请稍后再试",
     4292: "今天的次数已用完，明天再试",
     4293: "@所有人次数已用完",
+    // Blocked content (C6, P-48 ⑥) without a command (the account pages: username, nickname): the form's words; "send"
+    // gets "消息包含不当内容，无法发送" from the SDK's "command + code" table.
+    4510: contentBlockedFormText,
     5000: "服务异常，请稍后重试",
     5030: "服务异常，请稍后重试",
 ]

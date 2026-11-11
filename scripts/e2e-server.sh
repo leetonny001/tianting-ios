@@ -29,6 +29,9 @@ tt_server_start() {
       return 1
     fi
   done
+  # Word list and reporting (C6): IM_MOD_ENABLED=1 (with a random test-only IM_REPORT_KEY); /v1/config then says
+  # features.moderation=true. The caller has moderation.words (the word list API; tests add marker words only) and report.read
+  # (the queue: a report from the app is there, AC-MOD-03-1).
   # Pin, notifications off and delete (C5): IM_CONV_SETTINGS_ENABLED=1, /v1/config then says features.convSettings=true.
   # Recall, quote and @ (C4): IM_MSG_ACTIONS_ENABLED=1 (needs IM_QUARANTINE_KEY, set below); /v1/config then says
   # features.msgActions=true. Images and files (C2): the fake S3 (scripts/fake_s3.py, 127.0.0.1 only; the simulator shares the Mac's network, so the
@@ -47,12 +50,13 @@ tt_server_start() {
   b64="$(printf '%s' "$TT_E2E_SECRET" | base64)"
   callers="$TT_E2E_DIR/callers.json"
   (umask 077; cat > "$callers" <<JSON
-[{"id":"$TT_E2E_CALLER","alg":"hmac-sha256","secret":"$b64","scopes":["user.ban","msg.delete","mute.write","social.settings","social.friends","group.dissolve","group.write","push.user","push.all","account.invite"],"pushTypes":["notice","promo"]}]
+[{"id":"$TT_E2E_CALLER","alg":"hmac-sha256","secret":"$b64","scopes":["user.ban","msg.delete","mute.write","social.settings","social.friends","group.dissolve","group.write","push.user","push.all","account.invite","moderation.words","report.read"],"pushTypes":["notice","promo"]}]
 JSON
   )
   IM_ADDR="127.0.0.1:$port" IM_ADMIN_ADDR="127.0.0.1:$admin_port" IM_METRICS_ADDR=off \
     IM_DB="$TT_E2E_DIR/im.db" IM_TEST_MODE=1 IM_DEMO_LOGIN=1 IM_V13_ADMIN_FEATURES=1 IM_PUSH_ENABLED=1 \
     IM_MSG_ACTIONS_ENABLED="${IM_MSG_ACTIONS_ENABLED:-1}" IM_CONV_SETTINGS_ENABLED="${IM_CONV_SETTINGS_ENABLED:-1}" \
+    IM_MOD_ENABLED="${IM_MOD_ENABLED:-1}" IM_REPORT_KEY="$(openssl rand -base64 32)" \
     IM_REGISTER_MODE=invite IM_REFRESH_KEYS="e2e:$(openssl rand -hex 24)" IM_TEST_DISABLE_AUTH_LOCK=1 \
     IM_ADMIN_KEY="$TT_E2E_ADMIN_KEY" IM_JWT_SECRET="$(openssl rand -hex 24)" \
     IM_QUARANTINE_KEY="$(openssl rand -hex 24)" IM_ADMIN_CALLERS="$callers" \
