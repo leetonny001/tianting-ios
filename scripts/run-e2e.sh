@@ -6,6 +6,7 @@
 # TT_E2E_EXTERNAL=1: use a server that is already running (FE-640 cross-platform tests: the three platforms take turns on one
 #   server). TT_E2E_HTTP, TT_E2E_ADMIN, TT_E2E_S3, TT_E2E_ADMIN_KEY, TT_E2E_CALLER, TT_E2E_SECRET and TT_E2E_DIR (its
 #   server.log is checked afterwards) must be set; the server is not stopped. TT_E2E_XP, TT_E2E_XP_FROM go to the tests.
+#   TT_E2E_XP_COORD: the signal board of the C5 cross-platform tests (FE-686, CrossPlatformC5E2ETests).
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEVICE="TT iPhone 18 Pro"
@@ -61,6 +62,7 @@ TEST_RUNNER_TT_E2E_HTTP="$TT_E2E_HTTP" TEST_RUNNER_TT_E2E_ADMIN="$TT_E2E_ADMIN" 
   TEST_RUNNER_TT_E2E_SECRET="$TT_E2E_SECRET" TEST_RUNNER_TT_E2E_SCREENSHOTS="$SHOTS" \
   TEST_RUNNER_TT_E2E_CONTROL="$TT_E2E_DIR/control" \
   TEST_RUNNER_TT_E2E_XP="${TT_E2E_XP:-}" TEST_RUNNER_TT_E2E_XP_FROM="${TT_E2E_XP_FROM:-}" \
+  TEST_RUNNER_TT_E2E_XP_COORD="${TT_E2E_XP_COORD:-}" \
   xcodebuild test -project "$REPO/Tianting.xcodeproj" -scheme Tianting -destination "id=$UDID" \
   -derivedDataPath "$DERIVED" -resultBundlePath "$RESULT" -parallel-testing-enabled NO -collect-test-diagnostics never \
   ${ONLY[@]+"${ONLY[@]}"} 2>&1 | tee "$DERIVED/last.log" \
