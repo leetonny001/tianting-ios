@@ -547,6 +547,42 @@ final class TCPProxy: @unchecked Sendable {
         if !found.isEmpty { lock.withLock { _events += found } }
     }
 
+    /// Server-to-app WebSocket text frames, in arrival order (FE-698: the reported user's device must hear nothing but the
+    /// sentinel). Test memory only; a compressed or non-text data frame is kept as "<binary>" so it still counts.
+    var socketFrames: [(at: Date, text: String)] { lock.withLock { _frames } }
+    private var _frames: [(at: Date, text: String)] = []
+    private var frameBuffers: [ObjectIdentifier: Data] = [:]  // touched on `queue` only
+
+    private func feedFrames(_ conn: NWConnection, _ data: Data) {
+        let key = ObjectIdentifier(conn)
+        var buf = (frameBuffers[key] ?? Data()) + data
+        while true {
+            let b = [UInt8](buf.prefix(14))
+            guard b.count >= 2 else { break }
+            let opcode = b[0] & 0x0f
+            var len = Int(b[1] & 0x7f)
+            var off = 2
+            if len == 126 {
+                guard b.count >= 4 else { break }
+                len = Int(b[2]) << 8 | Int(b[3])
+                off = 4
+            } else if len == 127 {
+                guard b.count >= 10 else { break }
+                len = (2..<10).reduce(0) { $0 << 8 | Int(b[$1]) }
+                off = 10
+            }
+            if b[1] & 0x80 != 0 { off += 4 }  // a masked frame (not what a server sends)
+            guard buf.count >= off + len else { break }
+            let payload = buf.subdata(in: (buf.startIndex + off)..<(buf.startIndex + off + len))
+            if opcode == 1 || opcode == 2 || opcode == 0 {
+                let text = opcode == 1 && b[0] & 0x40 == 0 ? String(decoding: payload, as: UTF8.self) : "<binary>"
+                lock.withLock { _frames.append((at: Date(), text: text)) }
+            }
+            buf = buf.subdata(in: (buf.startIndex + off + len)..<buf.endIndex)
+        }
+        frameBuffers[key] = buf
+    }
+
     private func pump(from: NWConnection, to: NWConnection, isResponse: Bool, upgraded: Bool = false) {
         from.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, done, error in
             guard let self else { return }
@@ -558,6 +594,12 @@ final class TCPProxy: @unchecked Sendable {
                         self._upgrades += 1
                         self._events.append("status:101")
                     }
+                    // Frames can ride in the same chunk as the 101 headers.
+                    if let end = data.range(of: Data("\r\n\r\n".utf8)) {
+                        self.feedFrames(from, data.subdata(in: end.upperBound..<data.endIndex))
+                    }
+                } else if isResponse, isSocket {
+                    self.feedFrames(from, data)
                 }
                 if isResponse, !isSocket { self.note(data) }
                 if isResponse { self.noteEvents(data, socket: isSocket) }
